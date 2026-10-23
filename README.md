@@ -18,7 +18,7 @@ Mascotte gardienne pour Hyprland, propulsée par Claude : elle veille sur ton é
 ## Prérequis (Arch Linux)
 
 ```bash
-sudo pacman -S python python-gobject gtk4 gtk4-layer-shell grim slurp wl-clipboard
+sudo pacman -S python python-gobject gtk4 gtk4-layer-shell grim wl-clipboard
 ```
 
 Et [Claude Code](https://claude.com/claude-code), connecté à ton compte (`claude /login`).
