@@ -90,3 +90,12 @@ def test_follows_window_move_and_resize() -> None:
 def test_inside_uses_mascot_center() -> None:
     assert position.inside(WIN.x - CANVAS // 2 + 5, WIN.y, CANVAS, WIN)
     assert not position.inside(WIN.x - CANVAS, WIN.y, CANVAS, WIN)
+
+
+def test_stowed_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    assert position.load_stowed() is False
+    position.save_stowed(True)
+    assert position.load_stowed() is True
+    position.save_stowed(False)
+    assert position.load_stowed() is False

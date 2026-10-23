@@ -23,6 +23,7 @@ class FakeUI:
         self.notices: list[str | None] = []
         self.hidden: list[bool] = []
         self.attached: list = []
+        self.toggles = 0
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
@@ -53,6 +54,9 @@ class FakeUI:
 
     def detach(self) -> None:
         self.attached.append(None)
+
+    def toggle_stowed(self) -> None:
+        self.toggles += 1
 
 
 @pytest.fixture
@@ -487,6 +491,11 @@ def test_detach(ui) -> None:
     assert ui.attached == [None]
     d.set_attached(None)  # confirmation de l'overlay
     assert d.attached is None
+
+
+def test_toggle_command(ui) -> None:
+    daemon.Daemon(Config(), ui).handle({"type": "toggle"})
+    assert ui.toggles == 1
 
 
 def test_successful_command_is_ignored(ui) -> None:

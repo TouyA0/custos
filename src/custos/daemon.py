@@ -37,6 +37,7 @@ class UI(Protocol):
     def set_hidden(self, hidden: bool) -> None: ...
     def attach(self, window: hyprland.ActiveWindow) -> None: ...
     def detach(self) -> None: ...
+    def toggle_stowed(self) -> None: ...
 
 
 @dataclass
@@ -79,6 +80,8 @@ class Daemon:
                 self.attach_active()
             case "detach":
                 self.ui.detach()
+            case "toggle":
+                self.ui.toggle_stowed()
             case other:
                 log.warning("type de message inconnu : %s", other)
 

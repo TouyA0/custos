@@ -13,6 +13,7 @@ size = 96    # taille du sprite en pixels
 sleep_after = 300  # secondes sans activité avant qu'elle s'endorme
 outline = true     # halo clair autour d'elle, pour la voir sur un fond sombre
 hide_in_fullscreen = true  # disparaît quand une fenêtre est en plein écran (vidéo, jeu…)
+tray = true  # icône dans la barre : clic pour la ranger ou l'afficher, clic droit pour la bulle
 # sprites_dir = "~/mes-sprites"  # par défaut : assets/sprites du projet
 
 [privacy]

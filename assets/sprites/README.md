@@ -23,6 +23,9 @@ Pour les recadrer et les ranger ici :
 .venv/bin/python scripts/prepare_sprites.py ~/Downloads
 ```
 
+Il génère aussi `assets/icon.png`, l'icône de la barre : à partir de `icone.png` si
+présent, sinon en découpant la tête dans `repos.png`.
+
 Le script applique le même cadre à toutes les images (la mascotte ne bouge pas
 d'un état à l'autre) et efface le voile gris semi-transparent que le générateur
 ajoute parfois, sans toucher à la lueur de la lanterne.

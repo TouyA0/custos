@@ -72,3 +72,6 @@ class NotifyUI:
 
     def detach(self) -> None:
         pass
+
+    def toggle_stowed(self) -> None:
+        pass

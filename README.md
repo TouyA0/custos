@@ -52,6 +52,10 @@ affiché, et chaque question inclut une capture de cette fenêtre, même si une 
 focus. La glisser hors de la fenêtre (ou `custos detach`) la détache ; elle se détache aussi
 quand la fenêtre se ferme. Le menu permet aussi de la remettre dans le coin.
 
+Une icône dans la barre (caelestia) permet de la ranger : clic pour la cacher ou la faire
+réapparaître, clic droit pour lui poser une question. Aussi via le clic droit sur la mascotte
+(« Se ranger dans la barre ») ou `custos toggle`. Elle reste rangée d'une session à l'autre.
+
 Elle disparaît quand une fenêtre passe en plein écran (vidéo, jeu, présentation) et revient
 ensuite ; une fenêtre simplement maximisée ne la cache pas (`hide_in_fullscreen` dans la config).
 
@@ -103,10 +107,12 @@ src/custos/
     ├── overlay.py  la mascotte : fenêtre layer-shell GTK4, au-dessus de tout
     ├── bubble.py   bulle de dialogue : saisie, réponse en streaming, copie
     ├── position.py position de la mascotte (glisser-déposer) et placement de la bulle
+    ├── tray.py     icône dans la barre (StatusNotifierItem, D-Bus)
     ├── markdown.py Markdown des réponses → balisage Pango
     ├── animation.py  flottement, clignement, endormissement (sans GTK, testé)
     └── notify.py   notifications (réponses, et repli si l'overlay est impossible)
 assets/sprites/     images de la mascotte, un dossier par état
+assets/icon.png     icône de la barre
 scripts/            préparation des sprites
 integrations/       snippets Hyprland (Lua) et bash
 tests/

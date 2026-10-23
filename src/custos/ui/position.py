@@ -113,3 +113,21 @@ def save(x: int, y: int) -> None:
 
 def forget() -> None:
     _state_file().unlink(missing_ok=True)
+
+
+def _stowed_file():
+    return state_dir() / "stowed"
+
+
+def load_stowed() -> bool:
+    """La mascotte était rangée dans la barre à la dernière session."""
+    return _stowed_file().exists()
+
+
+def save_stowed(stowed: bool) -> None:
+    path = _stowed_file()
+    if stowed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    else:
+        path.unlink(missing_ok=True)

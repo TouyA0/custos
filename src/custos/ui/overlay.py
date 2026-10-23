@@ -32,6 +32,7 @@ from custos.ui.animation import BLINK_SPRITE, SPRITES, Animator
 from custos.ui.bubble import CSS as BUBBLE_CSS
 from custos.ui.bubble import WIDTH as BUBBLE_WIDTH
 from custos.ui.bubble import Bubble
+from custos.ui.tray import Tray
 
 APP_ID = "io.github.touya0.Custos"
 PADDING = 0.1  # marge autour du sprite (fraction de la taille) pour le flottement et le rebond
@@ -50,6 +51,7 @@ DRAG_THRESHOLD = 6  # pixels : en dessous, c'est un clic
 FALLBACK_SCREEN = (1920, 1080)  # si Hyprland ne répond pas
 
 DEFAULT_SPRITES = Path(__file__).resolve().parents[3] / "assets" / "sprites"
+DEFAULT_ICON = DEFAULT_SPRITES.parent / "icon.png"
 
 def is_supported() -> bool:
     return LayerShell.is_supported()
@@ -190,6 +192,8 @@ class MascotOverlay:
         self._follow_timer = 0
         self._hidden_fullscreen = False
         self._hidden_offscreen = False  # fenêtre accrochée sur un autre espace de travail
+        self.can_stow = config.tray  # icône dans la barre pour la retrouver
+        self._stowed = config.tray and position.load_stowed()
 
         self.window = Gtk.Window(application=app, title="Custos", decorated=False)
         self.window.add_css_class("custos")
@@ -305,7 +309,14 @@ class MascotOverlay:
 
     def _update_visibility(self) -> None:
         # Seule la mascotte disparaît : une bulle ouverte reste là où tu l'as laissée.
-        self.window.set_visible(not (self._hidden_fullscreen or self._hidden_offscreen))
+        hidden = self._hidden_fullscreen or self._hidden_offscreen or self._stowed
+        self.window.set_visible(not hidden)
+
+    def toggle_stowed(self) -> None:
+        """Range la mascotte dans la barre, ou l'en fait ressortir."""
+        self._stowed = not self._stowed
+        position.save_stowed(self._stowed)
+        self._update_visibility()
 
     # --- accrochage à une fenêtre ----------------------------------------------
 
@@ -371,6 +382,7 @@ class MascotOverlay:
             ("attach", self._attach_candidate),
             ("detach", self.detach),
             ("reset", self._reset_position),
+            ("stow", self.toggle_stowed),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_args, callback=callback: callback())
@@ -396,6 +408,8 @@ class MascotOverlay:
             if self._candidate and self._candidate.address:
                 model.append(f"S'accrocher à « {_short_name(self._candidate)} »", "mascot.attach")
         model.append("Remettre dans le coin", "mascot.reset")
+        if self.can_stow:
+            model.append("Se ranger dans la barre", "mascot.stow")
         self.menu.set_menu_model(model)
         target = Gdk.Rectangle()
         target.x, target.y, target.width, target.height = int(x), int(y), 1, 1
@@ -428,6 +442,7 @@ class MascotOverlay:
 
     def show(self) -> None:
         self.window.present()
+        self._update_visibility()  # peut-être rangée depuis la dernière session
 
 
 class OverlayUI:
@@ -485,12 +500,16 @@ class OverlayUI:
     def detach(self) -> None:
         self._on_gtk_thread(lambda overlay: overlay.detach())
 
+    def toggle_stowed(self) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.toggle_stowed())
+
 
 class MascotApp(Gtk.Application):
     def __init__(self, config: MascotConfig) -> None:
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.config = config
         self.overlay: MascotOverlay | None = None
+        self.tray: Tray | None = None
         # Remplacés par OverlayUI.connect une fois le daemon créé.
         self.on_submit: Callable[[str], None] = lambda question: None
         self.on_close: Callable[[], None] = lambda: None
@@ -501,4 +520,11 @@ class MascotApp(Gtk.Application):
     def _on_activate(self, app: Gtk.Application) -> None:
         if self.overlay is None:
             self.overlay = MascotOverlay(self, self.config)
+            if self.config.tray:
+                self.tray = Tray(
+                    DEFAULT_ICON,
+                    on_activate=self.overlay.toggle_stowed,
+                    on_secondary=lambda: self.on_open(),
+                )
+                self.tray.start()
         self.overlay.show()
