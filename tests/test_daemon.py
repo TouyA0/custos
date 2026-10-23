@@ -402,5 +402,5 @@ def test_cli_without_daemon(monkeypatch, tmp_path: Path, capsys) -> None:
 
     assert cli.main(["shell-event", "--exit-code", "1"]) == 0  # silencieux
     assert cli.main(["ask", "salut"]) == 1
-    assert "custos daemon" in capsys.readouterr().out
+    assert "custos start" in capsys.readouterr().out
     assert len(notified) == 1

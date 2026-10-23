@@ -4,7 +4,6 @@ import logging
 import os
 import shutil
 import signal
-import sys
 import tempfile
 import threading
 import time
@@ -16,10 +15,9 @@ from custos import claude, context, ipc, watch
 from custos.config import Config, load
 from custos.context import Context, clipboard, hyprland, privacy
 from custos.states import MascotState
+from custos.supervisor import EXIT_ALREADY_RUNNING, setup_logging
 
 log = logging.getLogger(__name__)
-
-LAYER_SHELL_LIB = Path("/usr/lib/libgtk4-layer-shell.so")
 
 MIN_SELECTION = 3  # caractères : en dessous, ce n'est sans doute pas une vraie sélection
 RECENT_FAILURE = 30.0  # secondes : même durée que l'inquiétude de la mascotte
@@ -220,15 +218,6 @@ class Daemon:
         self.ui.set_state(MascotState.WORRIED)
 
 
-def _preload_layer_shell() -> None:
-    """gtk4-layer-shell doit être chargé avant libwayland : on se relance avec LD_PRELOAD."""
-    preload = os.environ.get("LD_PRELOAD", "")
-    if "libgtk4-layer-shell" in preload or not LAYER_SHELL_LIB.exists():
-        return
-    env = dict(os.environ, LD_PRELOAD=f"{LAYER_SHELL_LIB} {preload}".strip())
-    os.execve(sys.executable, [sys.executable, "-m", "custos", "daemon"], env)
-
-
 def _gtk_app(config: Config):
     """Application GTK de la mascotte, ou None si l'overlay est impossible (pas de layer-shell…)."""
     try:
@@ -243,8 +232,9 @@ def _gtk_app(config: Config):
 
 
 def run() -> int:
-    _preload_layer_shell()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s custos %(levelname)s %(message)s")
+    """Le vrai daemon, lancé par le superviseur (voir supervisor.py)."""
+    # Ses lignes de log partent sur stderr, que le superviseur redirige vers le fichier de log.
+    setup_logging("daemon", to_file=False)
     config = load()
 
     handler: list = []  # rempli une fois le daemon créé
@@ -252,7 +242,7 @@ def run() -> int:
         server = ipc.Server(lambda message: handler[0](message))
     except ipc.DaemonAlreadyRunning:
         log.error("un daemon Custos tourne déjà")
-        return 1
+        return EXIT_ALREADY_RUNNING
     log.info("à l'écoute sur %s", server.path)
 
     app = _gtk_app(config)

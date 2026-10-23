@@ -6,7 +6,7 @@ Hyprland ou le hook shell) lui envoient simplement un message via le socket.
 
 import argparse
 
-from custos import __version__, ipc
+from custos import __version__, ipc, supervisor
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,7 +14,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"custos {__version__}")
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
-    sub.add_parser("daemon", help="lance la mascotte (à démarrer avec Hyprland)")
+    daemon = sub.add_parser("daemon", help="lance la mascotte et la relance si elle plante")
+    daemon.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    sub.add_parser("start", help="démarre Custos en arrière-plan")
+    sub.add_parser("stop", help="arrête Custos")
+    sub.add_parser("restart", help="redémarre Custos (après une modification du code)")
+    sub.add_parser("status", help="indique si Custos tourne")
+    logs = sub.add_parser("logs", help="affiche le log")
+    logs.add_argument("-f", "--follow", action="store_true", help="suit le log en direct")
+    logs.add_argument("-n", "--lines", type=int, default=50)
 
     ask = sub.add_parser("ask", help="pose une question à Custos")
     ask.add_argument("question", nargs="?", help="question ; sans argument, ouvre la bulle")
@@ -34,9 +42,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.subcommand == "daemon":
-            from custos.daemon import run
+            if args.worker:
+                from custos.daemon import run
 
-            return run()
+                return run()
+            return supervisor.supervise()
+        if args.subcommand in ("start", "stop", "restart", "status"):
+            return getattr(supervisor, args.subcommand)()
+        if args.subcommand == "logs":
+            return supervisor.logs(args.follow, args.lines)
 
         if args.subcommand == "ask":
             ipc.send(
@@ -63,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         # `custos ask` vient souvent d'un raccourci, sans terminal : on prévient aussi à l'écran.
         from custos.ui.notify import notify
 
-        message = "Custos ne tourne pas : lance `custos daemon`."
+        message = "Custos ne tourne pas : lance `custos start`."
         print(f"custos: {message}")
         notify("Custos", message)
         return 1

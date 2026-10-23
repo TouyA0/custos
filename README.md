@@ -28,14 +28,20 @@ python -m venv --system-site-packages .venv
 mkdir -p ~/.config/custos && cp config/config.example.toml ~/.config/custos/config.toml
 ```
 
-Lancer la mascotte :
+Lancer et gérer la mascotte :
 
 ```bash
-.venv/bin/custos daemon
+custos start      # démarre en arrière-plan (custos daemon : au premier plan)
+custos restart    # après une modification du code
+custos stop
+custos status
+custos logs -f    # suit le log : ~/.local/state/custos/custos.log
 ```
 
-Le daemon se relance tout seul avec `LD_PRELOAD=libgtk4-layer-shell.so`, nécessaire
-à gtk4-layer-shell depuis Python.
+`custos daemon` est un petit superviseur : il lance le vrai daemon (avec le
+`LD_PRELOAD=libgtk4-layer-shell.so` nécessaire depuis Python) et le relance s'il plante,
+jusqu'à 5 fois par minute. Le log ne contient jamais le contenu de tes questions,
+sélections ou commandes : seulement des événements, des tailles et des durées.
 
 Un clic sur la mascotte (ou `custos ask`) ouvre la bulle : tape ta question, Entrée,
 et la réponse s'affiche au fil de l'eau. Tu peux enchaîner avec une question de suivi ;
@@ -72,7 +78,8 @@ Puis `hyprctl reload`. Un hook bash existe aussi : `integrations/shell/custos.ba
 
 ```
 src/custos/
-├── cli.py          commandes `custos daemon | ask | shell-event`
+├── cli.py          commandes `custos daemon | start | stop | ask …`
+├── supervisor.py   relance du daemon s'il plante, fichier de log, start/stop/status
 ├── daemon.py       boucle principale
 ├── ipc.py          socket Unix entre les commandes et le daemon
 ├── claude.py       appels à `claude -p`
