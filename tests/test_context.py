@@ -1,0 +1,74 @@
+from pathlib import Path
+
+import pytest
+
+from custos import context
+from custos.config import PrivacyConfig
+from custos.context import Context, build_prompt
+from custos.context.hyprland import ActiveWindow, parse
+
+WINDOW = ActiveWindow("foot", "~/code", x=71, y=21, width=1228, height=773)
+
+
+def test_parse_hyprctl_output() -> None:
+    window = parse({"class": "foot", "title": "~/code", "at": [71, 21], "size": [1228, 773]})
+    assert window == WINDOW
+    assert window.geometry == "71,21 1228x773"
+
+
+def test_parse_without_window() -> None:
+    assert parse({}) is None
+
+
+@pytest.fixture
+def fake_desktop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Remplace hyprctl, wl-paste et grim ; renvoie la liste des captures demandées."""
+    captures: list[str] = []
+    monkeypatch.setattr(context.hyprland, "active_window", lambda: WINDOW)
+    monkeypatch.setattr(context.clipboard, "selection", lambda: "export TOKEN=abcdef123456")
+    monkeypatch.setattr(
+        context.screen, "capture", lambda w: captures.append(w.geometry) or Path("/tmp/x.png")
+    )
+    return captures
+
+
+def test_collect_reads_and_redacts_selection(fake_desktop: list[str]) -> None:
+    ctx = context.collect(PrivacyConfig(), selection=True)
+    assert ctx.window == WINDOW
+    assert ctx.selection == "export TOKEN=[secret masqué]"
+    assert fake_desktop == []
+
+
+def test_collect_screenshot(fake_desktop: list[str]) -> None:
+    ctx = context.collect(PrivacyConfig(), screenshot=True)
+    assert ctx.screenshot == Path("/tmp/x.png")
+    assert fake_desktop == ["71,21 1228x773"]
+
+
+def test_blocked_window_reads_nothing(fake_desktop: list[str]) -> None:
+    ctx = context.collect(PrivacyConfig(blocked_classes=["foot"]), selection=True, screenshot=True)
+    assert ctx.blocked
+    assert ctx.selection == ""
+    assert ctx.screenshot is None
+    assert fake_desktop == []
+
+
+def test_prompt_with_selection_and_default_question() -> None:
+    prompt = build_prompt(None, Context(window=WINDOW, selection="ls -la"))
+    assert "Fenêtre active : foot — « ~/code »" in prompt
+    assert "```\nls -la\n```" in prompt
+    assert prompt.endswith(f"Question : {context.DEFAULT_QUESTION}")
+
+
+def test_prompt_hides_blocked_window() -> None:
+    prompt = build_prompt("salut", Context(window=WINDOW, blocked=True))
+    assert prompt == "Question : salut"
+
+
+def test_cleanup_removes_screenshot(tmp_path: Path) -> None:
+    shot = tmp_path / "custos.png"
+    shot.write_bytes(b"png")
+    ctx = Context(screenshot=shot)
+    ctx.cleanup()
+    assert not shot.exists()
+    assert ctx.screenshot is None
