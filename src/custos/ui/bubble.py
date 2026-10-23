@@ -4,7 +4,10 @@ Une ligne pour demander, puis seulement la dernière réponse. ＋ démarre une 
 conversation, ↗ ouvre la conversation complète en grand (Claude Code dans un terminal).
 Un clic n'importe où en dehors de la carte la ferme.
 
-Fenêtres layer-shell à part, placées au-dessus (ou en dessous) de la mascotte.
+La carte vit dans une surface layer-shell plein écran presque invisible : un clic sur
+cette surface, hors de la carte, la ferme. (Une surface séparée pour attraper ces clics
+ne marche pas : quand la carte a le clavier en exclusif, Hyprland lui réserve aussi la
+souris.) La carte peut ainsi changer de taille sans redimensionner de fenêtre.
 Toutes les méthodes s'exécutent dans le thread GTK.
 """
 
@@ -14,10 +17,11 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
+gi.require_version("Graphene", "1.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 
-from gi.repository import Gdk, GLib, Gtk, Pango
+from gi.repository import Gdk, GLib, Graphene, Gtk, Pango
 from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.context import clipboard
@@ -27,13 +31,15 @@ from custos.ui.position import Placement
 WIDTH = 400
 MAX_HEIGHT = 360
 COPIED_FEEDBACK = 1500  # ms d'affichage du ✓ après une copie
+FADE = 120  # ms : fondu de la carte à l'ouverture et à la fermeture
 RENDER_INTERVAL = 120  # ms : pendant l'arrivée d'une réponse, on redessine au plus ~8 fois/s
 FONT = "JetBrains Mono Nerd Font"  # la police du terminal (foot)
 
 # Pas de flou : une règle de flou Hyprland sur cette carte a coïncidé avec des gels de
 # l'affichage (Hyprland 0.56). Fond blanc presque opaque pour rester lisible sans lui.
 CSS = f"""
-window.custos-bubble, window.custos-catcher {{ background: transparent; }}
+/* Pas totalement transparent : Hyprland n'envoie pas la souris à une surface à 0 %. */
+window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
 .card {{
     background-color: rgba(248, 248, 250, 0.97);
     border: 1px solid rgba(255, 255, 255, 0.7);
@@ -41,7 +47,9 @@ window.custos-bubble, window.custos-catcher {{ background: transparent; }}
     padding: 8px 10px 12px 14px;
     font-family: "{FONT}", monospace;
     font-size: 10pt;
+    transition: opacity {FADE}ms ease-out;
 }}
+.card.hidden {{ opacity: 0; }}
 .card label {{ color: #1a1f2b; }}
 .card .context {{ font-size: 0.85em; color: rgba(26, 31, 43, 0.5); }}
 .card .question {{ color: rgba(26, 31, 43, 0.55); }}
@@ -98,36 +106,6 @@ def _icon_button(label: str, tooltip: str, on_click: Callable[..., None], *extra
     return button
 
 
-class OutsideCatcher:
-    """Surface transparente plein écran, juste sous la carte : un clic dessus la ferme.
-
-    Ce clic ne va pas à la fenêtre en dessous (comme pour un menu). La surface n'existe
-    que tant que la carte est ouverte : restée seule, elle bloquerait tous les clics.
-    """
-
-    def __init__(self, app: Gtk.Application, on_click: Callable[[], None]) -> None:
-        self.window = Gtk.Window(application=app, title="Custos", decorated=False)
-        self.window.add_css_class("custos-catcher")
-        LayerShell.init_for_window(self.window)
-        LayerShell.set_namespace(self.window, "custos-catcher")
-        LayerShell.set_layer(self.window, LayerShell.Layer.OVERLAY)
-        LayerShell.set_keyboard_mode(self.window, LayerShell.KeyboardMode.NONE)
-        LayerShell.set_exclusive_zone(self.window, -1)
-        for edge in (LayerShell.Edge.TOP, LayerShell.Edge.BOTTOM, LayerShell.Edge.LEFT, LayerShell.Edge.RIGHT):
-            LayerShell.set_anchor(self.window, edge, True)
-        self.window.set_child(Gtk.Box(hexpand=True, vexpand=True))
-        click = Gtk.GestureClick(button=0)  # n'importe quel bouton
-        click.connect("pressed", lambda *_: on_click())
-        self.window.add_controller(click)
-
-    def show(self) -> None:
-        if not self.window.get_visible():
-            self.window.present()
-
-    def hide(self) -> None:
-        self.window.set_visible(False)
-
-
 class Bubble:
     def __init__(
         self,
@@ -150,8 +128,8 @@ class Bubble:
         self._render_pending = 0
         self._height: tuple[bool, int] | None = None
         self._placement: Placement | None = None
+        self._fade_timer = 0
 
-        self.catcher = OutsideCatcher(app, self.close)
         self.window = Gtk.Window(application=app, title="Custos", decorated=False)
         self.window.add_css_class("custos-bubble")
         LayerShell.init_for_window(self.window)
@@ -161,9 +139,13 @@ class Bubble:
         # pas de piège, puisqu'un clic en dehors la ferme.
         LayerShell.set_keyboard_mode(self.window, LayerShell.KeyboardMode.EXCLUSIVE)
         LayerShell.set_exclusive_zone(self.window, -1)  # coordonnées de l'écran entier
-        LayerShell.set_anchor(self.window, LayerShell.Edge.LEFT, True)
+        for edge in (LayerShell.Edge.TOP, LayerShell.Edge.BOTTOM, LayerShell.Edge.LEFT, LayerShell.Edge.RIGHT):
+            LayerShell.set_anchor(self.window, edge, True)
 
         self._build()
+        click = Gtk.GestureClick(button=0)  # n'importe quel bouton
+        click.connect("pressed", self._on_press)
+        self.window.add_controller(click)
 
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
@@ -211,6 +193,8 @@ class Bubble:
 
         for widget in (header, self.scroll, self.thinking_label, self.error, self.divider, self.entry):
             card.append(widget)
+        card.set_halign(Gtk.Align.START)
+        self.card = card
         self.window.set_child(card)
 
     def _text_widget(self, text: str) -> Gtk.Widget:
@@ -310,10 +294,11 @@ class Bubble:
         self._show()
 
     def close(self) -> None:
-        self.catcher.hide()  # toujours, même si la carte était déjà cachée
-        if not self.visible:
+        if not self.visible or self._fade_timer:
             return
-        self.window.set_visible(False)
+        # Fondu, puis la surface disparaît vraiment (elle bloquerait sinon les clics).
+        self.card.add_css_class("hidden")
+        self._fade_timer = GLib.timeout_add(FADE, self._hide)
         self._set_thinking(False)
         self._cancel_pending_render()
         self.question, self.answer = "", ""
@@ -324,21 +309,37 @@ class Bubble:
     def _show(self) -> None:
         if self.visible:
             return
+        if self._fade_timer:  # rouverte pendant le fondu de fermeture
+            GLib.source_remove(self._fade_timer)
+            self._fade_timer = 0
         self._apply_placement()
-        # La couche « clic en dehors » d'abord, la carte ensuite : la carte passe au-dessus.
-        self.catcher.show()
+        self.card.add_css_class("hidden")
         self.window.present()
         self.entry.grab_focus()
+        GLib.idle_add(lambda: self.card.remove_css_class("hidden") or GLib.SOURCE_REMOVE)
+
+    def _hide(self) -> bool:
+        self._fade_timer = 0
+        self.window.set_visible(False)
+        self.card.remove_css_class("hidden")
+        return GLib.SOURCE_REMOVE
+
+    def _on_press(self, _gesture, _n_press: int, x: float, y: float) -> None:
+        """Clic sur la surface plein écran : hors de la carte, on ferme."""
+        found, bounds = self.card.compute_bounds(self.window)
+        if found and not bounds.contains_point(Graphene.Point().init(x, y)):
+            self.close()
 
     def _apply_placement(self) -> None:
         if not self._placement:
             return
+        # Au-dessus de la mascotte, la carte est collée en bas de sa zone : elle grandit
+        # vers le haut sans jamais la recouvrir.
         top = self._placement.edge == "top"
-        LayerShell.set_anchor(self.window, LayerShell.Edge.TOP, top)
-        LayerShell.set_anchor(self.window, LayerShell.Edge.BOTTOM, not top)
-        LayerShell.set_margin(self.window, LayerShell.Edge.LEFT, self._placement.left)
-        edge = LayerShell.Edge.TOP if top else LayerShell.Edge.BOTTOM
-        LayerShell.set_margin(self.window, edge, self._placement.margin)
+        self.card.set_margin_start(self._placement.left)
+        self.card.set_valign(Gtk.Align.START if top else Gtk.Align.END)
+        self.card.set_margin_top(self._placement.margin if top else 0)
+        self.card.set_margin_bottom(0 if top else self._placement.margin)
 
     def _show_error(self, text: str) -> None:
         self.error.set_text(text)
@@ -399,10 +400,7 @@ class Bubble:
         GLib.idle_add(self._fit_and_scroll, from_top)
 
     def _fit_and_scroll(self, from_top: bool) -> bool:
-        # Une fenêtre GTK ne suit pas d'elle-même la taille naturelle de son contenu
-        # après le premier affichage : on impose la hauteur de la réponse (plafonnée),
-        # puis on redemande la plus petite taille possible pour qu'elle rétrécisse aussi.
-        # Seulement quand la hauteur change, pour ne pas solliciter le compositeur pour rien.
+        # Hauteur de la zone de réponse : naturelle, plafonnée à MAX_HEIGHT (avec défilement).
         width = self.blocks.get_width() or WIDTH - 28
         _minimum, natural, _, _ = self.blocks.measure(Gtk.Orientation.VERTICAL, width)
         long_answer = natural > MAX_HEIGHT
@@ -415,8 +413,6 @@ class Bubble:
                 Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC if long_answer else Gtk.PolicyType.NEVER
             )
             self.scroll.set_min_content_height(MAX_HEIGHT if long_answer else -1)
-            self.window.set_default_size(-1, -1)
-            self.window.queue_resize()
         adjustment = self.scroll.get_vadjustment()
         adjustment.set_value(adjustment.get_lower() if from_top else adjustment.get_upper())
         return GLib.SOURCE_REMOVE
