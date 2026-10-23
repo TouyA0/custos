@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from custos.supervisor import state_dir
 
 PADDING = 0.1  # marge autour du sprite dans sa fenêtre (fraction de la taille), pour le flottement
+DROP_TOLERANCE = 0.35  # fraction de la mascotte : distance au bord pour s'y accrocher en la lâchant
 ATTACH_MARGIN = 12  # écart avec le coin haut-gauche de la fenêtre quand on vient de l'accrocher
 # Hauteurs dans les sprites (fraction de leur taille), mesurées sur les images actuelles :
 SEAT_LINE = 0.76  # sitting/0 : bas du corps, d'où pendent les jambes
@@ -94,11 +95,27 @@ def on_edge(offset: int, size: int, canvas: int, window: Rect, sitting: bool) ->
     return x, y
 
 
-def near_edge(x: int, y: int, size: int, canvas: int, window: Rect, sitting: bool) -> bool:
-    """La mascotte (qu'on vient de déplacer) est encore sur le bord haut de la fenêtre."""
+def near_edge(
+    x: int, y: int, size: int, canvas: int, window: Rect, sitting: bool, tolerance: float | None = None
+) -> bool:
+    """La mascotte est sur le bord haut de la fenêtre (à `tolerance` pixels près)."""
     _, edge_y = on_edge(edge_offset(x, canvas, window), size, canvas, window, sitting)
+    edge_y = max(0, edge_y)  # fenêtre collée en haut de l'écran : la mascotte ne peut pas monter plus
     center = x + canvas / 2
-    return window.x <= center <= window.right and abs(y - edge_y) <= canvas / 2
+    limit = canvas / 2 if tolerance is None else tolerance
+    return window.x <= center <= window.right and abs(y - edge_y) <= limit
+
+
+def edge_target[T](x: int, y: int, size: int, canvas: int, windows: list[tuple[T, Rect]]) -> T | None:
+    """Fenêtre dont la mascotte survole le bord haut, pour s'y asseoir quand on la lâche.
+
+    `windows` va de la plus récemment utilisée à la plus ancienne : en cas de
+    chevauchement, celle du dessus l'emporte.
+    """
+    for key, rect in windows:
+        if near_edge(x, y, size, canvas, rect, sitting=True, tolerance=canvas * DROP_TOLERANCE):
+            return key
+    return None
 
 
 def _state_file():

@@ -104,3 +104,30 @@ def test_stowed_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert position.load_stowed() is True
     position.save_stowed(False)
     assert position.load_stowed() is False
+
+
+TOP_LEFT = position.Rect(71, 21, 1228, 773)  # fenêtre collée en haut de l'écran
+BOTTOM_LEFT = position.Rect(71, 806, 1228, 773)
+
+
+def test_drop_on_top_edge_targets_window() -> None:
+    windows = [("haut", TOP_LEFT), ("bas", BOTTOM_LEFT)]
+    x, y = position.on_edge(400, SIZE, CANVAS, BOTTOM_LEFT, sitting=True)
+    assert position.edge_target(x + 5, y + 10, SIZE, CANVAS, windows) == "bas"
+
+
+def test_drop_in_the_middle_of_a_window_targets_nothing() -> None:
+    windows = [("bas", BOTTOM_LEFT)]
+    assert position.edge_target(400, 1200, SIZE, CANVAS, windows) is None
+
+
+def test_window_at_top_of_screen_can_be_targeted() -> None:
+    # Son bord est trop haut pour que la mascotte s'assoie dessus : elle est bloquée à y = 0.
+    assert position.edge_target(300, 0, SIZE, CANVAS, [("haut", TOP_LEFT)]) == "haut"
+
+
+def test_most_recent_window_wins_when_overlapping() -> None:
+    floating = position.Rect(300, 800, 600, 400)  # fenêtre flottante sur BOTTOM_LEFT
+    x, y = position.on_edge(400, SIZE, CANVAS, BOTTOM_LEFT, sitting=True)
+    target = position.edge_target(x, y, SIZE, CANVAS, [("flottante", floating), ("bas", BOTTOM_LEFT)])
+    assert target == "flottante"

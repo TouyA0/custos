@@ -114,6 +114,22 @@ def find_window(address: str) -> ActiveWindow | None:
     return None
 
 
+def visible_windows() -> list[ActiveWindow]:
+    """Fenêtres affichées en ce moment, de la plus récemment utilisée à la plus ancienne
+    (ce qui approche l'ordre d'empilement pour les fenêtres qui se chevauchent)."""
+    clients = request("clients")
+    if not isinstance(clients, list):
+        return []
+    workspaces = visible_workspaces()
+    shown = [
+        c
+        for c in clients
+        if c.get("mapped", True) and not c.get("hidden") and (c.get("workspace") or {}).get("id") in workspaces
+    ]
+    shown.sort(key=lambda c: c.get("focusHistoryID", 0))
+    return [parse(c) for c in shown]
+
+
 def visible_workspaces() -> set[int]:
     """Espaces de travail affichés en ce moment (normal et spécial, sur chaque écran)."""
     monitors = request("monitors")

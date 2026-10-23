@@ -233,6 +233,7 @@ class MascotOverlay:
         self.widget.add_controller(drag)
         self._drag_start: tuple[tuple[int, int], tuple[int, int]] | None = None
         self._dragged = False
+        self._drag_windows: list[tuple[hyprland.ActiveWindow, position.Rect]] = []
         self._build_menu()
         self.window.set_child(self.widget)
 
@@ -266,6 +267,8 @@ class MascotOverlay:
         cursor = hyprland.cursor_position()
         self._drag_start = (cursor, (self.x, self.y)) if cursor else None
         self._dragged = False
+        # Lues une fois : les fenêtres ne bougent pas pendant que tu déplaces la mascotte.
+        self._drag_windows = [(window, self._rect(window)) for window in hyprland.visible_windows()]
 
     def _on_drag_update(self, *_args) -> None:
         cursor = hyprland.cursor_position()
@@ -277,22 +280,25 @@ class MascotOverlay:
             return  # simple clic, pas un déplacement
         self._dragged = True
         self.move_to(x + dx, y + dy)
+        # Au-dessus du bord haut d'une fenêtre, elle prend la pose assise : la lâcher là l'y accroche.
+        self.animator.sitting = self._drop_target() is not None
+
+    def _drop_target(self) -> hyprland.ActiveWindow | None:
+        return position.edge_target(self.x, self.y, self.config.size, self.canvas, self._drag_windows)
 
     def _on_drag_end(self, *_args) -> None:
         moved = self._drag_start and (self.x, self.y) != self._drag_start[1]
         self._drag_start = None
         if not moved:
+            self.animator.sitting = self.attached is not None
             return
-        if self.attached:
-            window = hyprland.find_window(self.attached)
-            if window and position.near_edge(
-                self.x, self.y, self.config.size, self.canvas, self._rect(window), self.animator.is_sitting
-            ):
-                # Glissée le long du bord : elle s'y repose à ce nouvel endroit.
-                self._attach_offset = position.edge_offset(self.x, self.canvas, self._rect(window))
-                self._follow()
-                return
-            self.detach(move_back=False)  # éloignée du bord : on la détache
+        target = self._drop_target()
+        if target:
+            # Lâchée sur le bord haut d'une fenêtre (la sienne ou une autre) : elle s'y assoit.
+            self.attach(target, offset=position.edge_offset(self.x, self.canvas, self._rect(target)))
+            return
+        self.detach(move_back=False)  # lâchée ailleurs : elle est libre, là où tu l'as posée
+        self.animator.sitting = False
         position.save(self.x, self.y)
 
     def _on_click(self, *_args) -> None:
@@ -334,17 +340,22 @@ class MascotOverlay:
             self.config.position, self.config.margin, self.canvas, *self.screen
         )
 
-    def attach(self, window: hyprland.ActiveWindow) -> None:
-        """S'assoit sur le bord haut de la fenêtre : au-dessus de l'endroit où elle est si
-        elle est déjà sur la fenêtre, sinon près du coin haut-gauche."""
+    def attach(self, window: hyprland.ActiveWindow, offset: int | None = None) -> None:
+        """S'assoit sur le bord haut de la fenêtre, à `offset` pixels de son bord gauche.
+
+        Sans `offset` (menu, `custos attach`) : au-dessus de l'endroit où elle est si
+        elle est déjà sur la fenêtre, sinon près du coin haut-gauche.
+        """
         rect = self._rect(window)
         self.attached = window.address
         self.animator.sitting = True
-        self._attach_offset = (
-            position.edge_offset(self.x, self.canvas, rect)
-            if position.inside(self.x, self.y, self.canvas, rect)
-            else position.ATTACH_MARGIN
-        )
+        if offset is None:
+            offset = (
+                position.edge_offset(self.x, self.canvas, rect)
+                if position.inside(self.x, self.y, self.canvas, rect)
+                else position.ATTACH_MARGIN
+            )
+        self._attach_offset = offset
         if not self._follow_timer:
             self._follow_timer = GLib.timeout_add(FOLLOW_INTERVAL, self._follow)
         self._follow()

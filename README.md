@@ -46,12 +46,14 @@ sélections ou commandes : seulement des événements, des tailles et des durée
 Glisse la mascotte où tu veux : sa position est mémorisée (`~/.local/state/custos/position.json` ;
 supprime ce fichier puis `custos restart` pour revenir au coin choisi dans la config).
 
-Clic droit sur la mascotte : **S'accrocher** à la fenêtre où tu étais (ou `custos attach`).
-Elle s'assoit sur le bord haut de la fenêtre, près du coin haut-gauche, et se lève quand
+Pour l'**accrocher à une fenêtre**, glisse-la sur le bord haut de cette fenêtre : elle prend
+la pose assise quand elle survole un bord, et s'y assoit quand tu la lâches. Autre moyen :
+clic droit sur la mascotte → **S'accrocher** à la fenêtre où tu étais (ou `custos attach`),
+et elle s'assoit près du coin haut-gauche. Elle se lève quand
 elle réfléchit, parle ou s'inquiète. Elle suit la fenêtre, se cache quand elle n'est pas
 sur l'espace de travail affiché, et chaque question inclut une capture de cette fenêtre,
-même si une autre a le focus. Glisse-la le long du bord pour la déplacer ; éloigne-la du
-bord (ou `custos detach`) pour la détacher. Elle se détache aussi quand la fenêtre se ferme.
+même si une autre a le focus. Glisse-la le long du bord pour la déplacer, sur le bord d'une
+autre fenêtre pour changer, ou lâche-la ailleurs (ou `custos detach`) pour la détacher. Elle se détache aussi quand la fenêtre se ferme.
 
 Une icône dans la barre (caelestia) permet de la ranger : clic pour la cacher ou la faire
 réapparaître, clic droit pour lui poser une question. Aussi via le clic droit sur la mascotte
