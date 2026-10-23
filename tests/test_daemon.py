@@ -24,6 +24,7 @@ class FakeUI:
         self.hidden: list[bool] = []
         self.attached: list = []
         self.toggles = 0
+        self.reopened: list[tuple[str, str, str]] = []
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
@@ -58,6 +59,9 @@ class FakeUI:
     def toggle_stowed(self) -> None:
         self.toggles += 1
 
+    def reopen(self, summary: str, question: str, answer: str) -> None:
+        self.reopened.append((summary, question, answer))
+
 
 @pytest.fixture
 def ui() -> FakeUI:
@@ -69,7 +73,7 @@ def prompts(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list | None]]:
     """Remplace Claude : renvoie toujours « Bonjour ! » et note les prompts reçus."""
     sent: list[tuple[str, list | None]] = []
 
-    def fake_ask(prompt, config, images=None, resume=None, on_session=None):
+    def fake_ask(prompt, config, images=None, resume=None, on_session=None, cancel=None):
         sent.append((prompt, images))
         if on_session:
             on_session("session-1")
@@ -97,7 +101,7 @@ def test_question_from_cli_streams_answer(monkeypatch, ui, prompts) -> None:
 def test_shortcut_without_question_opens_prompt(monkeypatch, ui, prompts) -> None:
     use_context(monkeypatch, Context(window=WINDOW, selection="ls -la"))
     daemon.Daemon(Config(), ui).handle({"type": "ask", "selection": True})
-    assert ui.prompts == [("foot · sélection : 6 car.", "Entrée : aide sur la sélection")]
+    assert ui.prompts == [("sélection : 6 car.", "Entrée : aide sur la sélection")]
     assert prompts == []
 
 
@@ -122,7 +126,7 @@ def test_empty_question_without_context_is_refused(monkeypatch, ui, prompts) -> 
 def test_follow_up_resumes_claude_session(monkeypatch, ui) -> None:
     calls = []
 
-    def fake_ask(prompt, config, images=None, resume=None, on_session=None):
+    def fake_ask(prompt, config, images=None, resume=None, on_session=None, cancel=None):
         calls.append((prompt, resume))
         on_session("session-1")
         yield "ok"
@@ -286,7 +290,7 @@ def test_click_after_failure_offers_to_explain(ui, prompts, collected) -> None:
     d.handle(FAILURE)
     d.open_from_mascot()
     assert collected == [{"selection": False, "screenshot": True, "failure": FAILURE, "image": None}]
-    assert ui.prompts == [("échec : pacmna -Syu (code 127)", "Entrée : pourquoi ça a échoué ?")]
+    assert ui.prompts == [("commande en échec : pacmna -Syu", "Entrée : pourquoi ça a échoué ?")]
 
     d.answer("")  # Entrée sans rien écrire
     prompt = prompts[0][0]
@@ -386,7 +390,7 @@ def test_caelestia_screenshot_is_copied_not_moved(ui, collected, desktop, tmp_pa
     d.open_from_mascot()
     sent = collected[0]["image"]
     assert sent != original and sent.read_bytes() == b"png"
-    assert ui.prompts[0][0] == "foot · capture d'écran"
+    assert ui.prompts[0][0] == "capture d'écran"
     d.close_session()
     assert original.exists() and not sent.exists()
 
@@ -399,7 +403,7 @@ def test_clipboard_image(ui, collected, desktop, tmp_path, monkeypatch) -> None:
     d.on_watch_event(watch.CLIPBOARD_IMAGE)
     d.open_from_mascot()
     assert collected[0]["image"] == image
-    assert ui.prompts[0] == ("foot · image copiée", "Entrée : que vois-tu ?")
+    assert ui.prompts[0] == ("image copiée", "Entrée : que vois-tu ?")
 
 
 def test_vanished_image_shows_error(ui, collected, desktop) -> None:
@@ -463,7 +467,7 @@ def test_attached_window_is_captured_even_if_not_active(monkeypatch, ui, collect
     d.open_from_mascot()
     assert collected[0]["window"] == BROWSER
     assert collected[0]["screenshot"] is True
-    assert ui.prompts[0][0] == "📌 brave-browser"
+    assert ui.prompts[0][0] == "📌 Brave browser"
 
 
 def test_selection_ignores_attached_window(monkeypatch, ui, collected) -> None:
@@ -501,6 +505,84 @@ def test_detach(ui) -> None:
     assert ui.attached == [None]
     d.set_attached(None)  # confirmation de l'overlay
     assert d.attached is None
+
+
+def test_reopening_soon_resumes_conversation(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW, selection="ls -la"))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "selection": True})
+    d.answer("explique")
+    d.close_bubble()
+    d.handle({"type": "ask"})  # clic sur la mascotte peu après
+    assert ui.reopened == [("sélection : 6 car.", "explique", "Bonjour !")]
+    assert len(ui.prompts) == 1  # pas de nouvelle conversation
+
+
+def test_reopening_later_starts_new_conversation(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("salut")
+    d.close_bubble()
+    later = daemon.time.monotonic() + daemon.RESUME_WINDOW + 1
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: later)
+    d.handle({"type": "ask"})
+    assert ui.reopened == []
+    assert len(ui.prompts) == 2
+
+
+def test_new_content_starts_new_conversation(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW, selection="ls"))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("salut")
+    d.close_bubble()
+    d.handle({"type": "ask", "selection": True})  # une sélection remarquée : nouveau contenu
+    assert ui.reopened == []
+
+
+def test_plus_button_starts_new_conversation(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("salut")
+    d.new_conversation()
+    assert len(ui.prompts) == 2
+    assert d.session.claude_session is None
+
+
+def test_closing_interrupts_answer(monkeypatch, ui) -> None:
+    started = threading.Event()
+
+    def endless_ask(prompt, config, images=None, resume=None, on_session=None, cancel=None):
+        on_session("session-1")
+        started.set()
+        yield "Il était une fois"
+        cancel.wait(2)  # comme claude.ask : s'arrête quand on annule
+
+    monkeypatch.setattr(claude, "ask", endless_ask)
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    worker = threading.Thread(target=d.answer, args=("raconte",))
+    worker.start()
+    started.wait(2)
+    d.close_bubble()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert ui.answers == []  # pas de réponse affichée après la fermeture
+    assert ui.states[-1] is MascotState.IDLE
+
+
+def test_closing_without_answer_forgets_conversation(monkeypatch, ui, tmp_path) -> None:
+    shot = tmp_path / "custos.png"
+    shot.write_bytes(b"png")
+    use_context(monkeypatch, Context(window=WINDOW, screenshot=shot))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "screen": True})
+    d.close_bubble()
+    assert d.session is None
+    assert not shot.exists()
 
 
 def test_toggle_command(ui) -> None:

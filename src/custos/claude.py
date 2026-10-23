@@ -111,11 +111,13 @@ def ask(
     system_prompt: str = SYSTEM_PROMPT,
     resume: str | None = None,
     on_session: Callable[[str], None] | None = None,
+    cancel: threading.Event | None = None,
 ) -> Iterator[str]:
     """Envoie `prompt` à Claude et renvoie la réponse morceau par morceau.
 
     `resume` : session à poursuivre (question de suivi). `on_session` reçoit
     l'identifiant de la session, pour la poursuivre ou l'ouvrir en grand ensuite.
+    `cancel` : une fois levé, `claude` est arrêté et la réponse s'interrompt sans erreur.
     """
     message = build_message(prompt, images)
     workdir = conversations_dir()
@@ -135,6 +137,15 @@ def ask(
 
     timer = threading.Timer(config.timeout, process.kill)
     timer.start()
+    if cancel:
+        # Arrêt immédiat, même si Claude n'a encore rien envoyé.
+        def watch_cancel() -> None:
+            while process.poll() is None:
+                if cancel.wait(0.1):
+                    process.kill()
+                    return
+
+        threading.Thread(target=watch_cancel, daemon=True).start()
     received = False
     try:
         process.stdin.write(json.dumps(message) + "\n")
@@ -154,6 +165,8 @@ def ask(
             process.kill()
             process.wait()
 
+    if cancel and cancel.is_set():
+        return  # interrompue à ta demande : pas une erreur
     if process.returncode == -9:
         raise ClaudeError(f"pas de réponse après {config.timeout} s")
     if process.returncode != 0 and not received:

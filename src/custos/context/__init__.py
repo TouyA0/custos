@@ -68,19 +68,32 @@ def collect(
     return context
 
 
+def app_name(window_class: str) -> str:
+    """Nom lisible d'une appli à partir de sa classe Hyprland.
+
+    « com.anthropic.Claude » → « Claude », « brave-browser » → « Brave browser ».
+    """
+    name = window_class.rsplit(".", 1)[-1].replace("-", " ").replace("_", " ").strip()
+    return name[:1].upper() + name[1:]
+
+
 def describe(context: Context) -> str:
-    """Résumé court de ce que Custos a lu, affiché en haut de la bulle."""
+    """Ce que Custos a lu, en haut de la carte ; vide quand ce n'est que la fenêtre active
+    (sans capture, son nom n'apprend rien)."""
+    app = app_name(context.window.window_class) if context.window else ""
     parts = []
     if context.failure:
         command = _short(privacy.redact_secrets(context.failure.get("command", "")))
-        parts.append(f"échec : {command} (code {context.failure.get('exit_code')})")
-    elif context.window:
-        prefix = "📌 " if context.attached else ""
-        parts.append(prefix + context.window.window_class)
+        parts.append(f"commande en échec : {command}")
+    elif context.attached and app:
+        parts.append(f"📌 {app}")
     if context.selection:
         parts.append(f"sélection : {len(context.selection)} car.")
     if context.screenshot:
-        parts.append(IMAGE_LABELS[context.image_kind][0])
+        label = IMAGE_LABELS[context.image_kind][0]
+        if context.image_kind == "window" and app and not context.attached:
+            label = f"capture de {app}"
+        parts.append(label)
     return " · ".join(parts)
 
 

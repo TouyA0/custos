@@ -216,6 +216,7 @@ class MascotOverlay:
             on_submit=lambda question: app.on_submit(question),
             on_close=lambda: app.on_close(),
             on_open_full=lambda: app.on_open_full(),
+            on_new=lambda: app.on_new(),
         )
 
         self.canvas = round(config.size * (1 + 2 * PADDING))
@@ -481,13 +482,15 @@ class OverlayUI:
     def connect(self, daemon) -> None:
         """Relie la mascotte et la bulle au daemon."""
         self.app.on_submit = daemon.submit
-        self.app.on_close = daemon.close_session
+        self.app.on_close = daemon.close_bubble
         # Le clic arrive dans le thread GTK ; lire le contexte appelle hyprctl et wl-paste.
         self.app.on_open = lambda: threading.Thread(
             target=daemon.open_from_mascot, daemon=True
         ).start()
         self.app.on_attached = daemon.set_attached
         self.app.on_open_full = daemon.open_full
+        # Lire le contexte appelle hyprctl et wl-paste : hors du thread GTK.
+        self.app.on_new = lambda: threading.Thread(target=daemon.new_conversation, daemon=True).start()
 
     def _on_gtk_thread(self, action: Callable[[MascotOverlay], None]) -> None:
         def run() -> bool:
@@ -511,6 +514,9 @@ class OverlayUI:
 
     def end_answer(self, answer: str) -> None:
         self._on_gtk_thread(lambda overlay: overlay.bubble.end_answer(answer))
+
+    def reopen(self, summary: str, question: str, answer: str) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.reopen(summary, question, answer))
 
     def show_error(self, text: str) -> None:
         self._on_gtk_thread(lambda overlay: overlay.bubble.show_error(text))
@@ -542,6 +548,7 @@ class MascotApp(Gtk.Application):
         self.on_close: Callable[[], None] = lambda: None
         self.on_open: Callable[[], None] = lambda: None
         self.on_open_full: Callable[[], None] = lambda: None
+        self.on_new: Callable[[], None] = lambda: None
         self.on_attached: Callable[[hyprland.ActiveWindow | None], None] = lambda window: None
         self.connect("activate", self._on_activate)
 

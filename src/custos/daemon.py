@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 MIN_SELECTION = 3  # caractères : en dessous, ce n'est sans doute pas une vraie sélection
 # Événements Hyprland après lesquels le plein écran a pu changer.
 FULLSCREEN_EVENTS = {"fullscreen", "activewindowv2", "workspacev2", "closewindow", "focusedmonv2"}
+RESUME_WINDOW = 600.0  # secondes : rouvrir la carte dans ce délai reprend la conversation
 RECENT_FAILURE = 30.0  # secondes : même durée que l'inquiétude de la mascotte
 IGNORED_EXIT_CODES = {130, 148}  # Ctrl+C et Ctrl+Z : interrompre n'est pas une erreur
 
@@ -36,6 +37,7 @@ class UI(Protocol):
     def end_answer(self, answer: str) -> None: ...
     def show_error(self, text: str) -> None: ...
     def show_notice(self, kind: str | None) -> None: ...
+    def reopen(self, summary: str, question: str, answer: str) -> None: ...
     def set_hidden(self, hidden: bool) -> None: ...
     def attach(self, window: hyprland.ActiveWindow) -> None: ...
     def detach(self) -> None: ...
@@ -57,6 +59,9 @@ class Session:
 
     context: Context
     claude_session: str | None = None  # session Claude Code, reprise pour les questions de suivi
+    summary: str = ""  # ce que Custos a lu, affiché en haut de la carte
+    last_question: str = ""
+    last_answer: str = ""
 
 
 class Daemon:
@@ -71,6 +76,8 @@ class Daemon:
         self.attached: str | None = None  # adresse de la fenêtre où la mascotte est accrochée
         self._last_selection_hash: int | None = None
         self._busy = threading.Lock()  # une seule question à Claude à la fois
+        self._cancel = threading.Event()  # levé quand on ferme la carte : la réponse s'arrête
+        self._closed_at = 0.0
 
     def handle(self, message: dict) -> None:
         match message.get("type"):
@@ -90,9 +97,18 @@ class Daemon:
                 log.warning("type de message inconnu : %s", other)
 
     def ask(self, message: dict) -> None:
-        """Raccourci ou `custos ask` : lit le contexte, puis répond ou ouvre la bulle."""
+        """Raccourci ou `custos ask` : lit le contexte, puis répond ou ouvre la bulle.
+
+        Sans rien de nouveau à montrer (ni question, sélection, image, erreur ou fenêtre
+        accrochée), rouvrir la carte peu après reprend la conversation précédente.
+        """
         if self._busy.locked():
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
+            return
+        if self._can_resume(message):
+            session = self.session
+            log.info("conversation reprise")
+            self.ui.reopen(session.summary, session.last_question, session.last_answer)
             return
         image = message.get("image")
         target = self._attached_window(message)
@@ -111,11 +127,35 @@ class Daemon:
             return
 
         self.close_session()
-        self.session = Session(ctx)
+        self.session = Session(ctx, summary=context.describe(ctx))
         if message.get("question"):
             self.answer(message["question"])
         else:
-            self.ui.open_prompt(context.describe(ctx), context.hint(ctx))
+            self.ui.open_prompt(self.session.summary, context.hint(ctx))
+
+    def _can_resume(self, message: dict) -> bool:
+        fresh = ("question", "selection", "screen", "image", "failure", "new")
+        session = self.session
+        return (
+            not any(message.get(key) for key in fresh)
+            and not self.attached  # accrochée : une nouvelle capture de la fenêtre à chaque fois
+            and session is not None
+            and bool(session.claude_session and session.last_answer)
+            and time.monotonic() - self._closed_at < RESUME_WINDOW
+        )
+
+    def new_conversation(self) -> None:
+        """Bouton ＋ : oublie la conversation en cours et en commence une nouvelle."""
+        self.close_session()
+        self.ask({"type": "ask", "new": True})
+
+    def close_bubble(self) -> None:
+        """Carte fermée : on arrête la réponse en cours et on garde la conversation un moment."""
+        self._cancel.set()
+        self._closed_at = time.monotonic()
+        session = self.session
+        if session and not session.claude_session:
+            self.close_session()  # rien à reprendre : on supprime aussi la capture
 
     def open_from_mascot(self) -> None:
         """Clic sur la mascotte : propose d'abord ce qu'elle vient de remarquer.
@@ -231,6 +271,7 @@ class Daemon:
         if not self._busy.acquire(blocking=False):
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
             return
+        self._cancel.clear()
         try:
             # Première question : avec le contexte (fenêtre, sélection, capture). Les suivantes
             # reprennent la session Claude, qui a déjà tout ça : juste la question.
@@ -247,18 +288,29 @@ class Daemon:
             self.ui.start_answer(question)
             started = time.monotonic()
             chunks = []
+
             def remember(session_id: str) -> None:
                 session.claude_session = session_id
 
             for chunk in claude.ask(
-                prompt, self.config.claude, images=images, resume=resume, on_session=remember
+                prompt,
+                self.config.claude,
+                images=images,
+                resume=resume,
+                on_session=remember,
+                cancel=self._cancel,
             ):
                 chunks.append(chunk)
                 self.ui.append_answer(chunk)
+            ctx.cleanup()  # la capture n'est envoyée qu'avec la première question
+            if self._cancel.is_set():
+                log.info("réponse interrompue (carte fermée)")
+                self.ui.set_state(MascotState.IDLE)
+                return
             answer = "".join(chunks).strip()
             log.info("réponse en %.1f s (%d car.)", time.monotonic() - started, len(answer))
 
-            ctx.cleanup()  # la capture n'est envoyée qu'avec la première question
+            session.last_question, session.last_answer = question, answer
             self.ui.end_answer(answer)
             self.ui.set_state(MascotState.TALKING)
         except claude.ClaudeError as exc:

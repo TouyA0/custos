@@ -1,8 +1,10 @@
-"""Bulle : une petite carte en verre blanc (flou de Hyprland derrière), comme le terminal.
+"""Bulle : une petite carte blanche, minimaliste, dans la police du terminal.
 
-Minimaliste : une ligne pour demander, puis seulement la dernière réponse. Le bouton
-↗ ouvre la conversation complète en grand (Claude Code dans un terminal).
-Fenêtre layer-shell à part, placée au-dessus (ou en dessous) de la mascotte.
+Une ligne pour demander, puis seulement la dernière réponse. ＋ démarre une nouvelle
+conversation, ↗ ouvre la conversation complète en grand (Claude Code dans un terminal).
+Un clic n'importe où en dehors de la carte la ferme.
+
+Fenêtres layer-shell à part, placées au-dessus (ou en dessous) de la mascotte.
 Toutes les méthodes s'exécutent dans le thread GTK.
 """
 
@@ -25,18 +27,18 @@ from custos.ui.position import Placement
 WIDTH = 400
 MAX_HEIGHT = 360
 COPIED_FEEDBACK = 1500  # ms d'affichage du ✓ après une copie
+RENDER_INTERVAL = 120  # ms : pendant l'arrivée d'une réponse, on redessine au plus ~8 fois/s
 FONT = "JetBrains Mono Nerd Font"  # la police du terminal (foot)
 
-# Fond blanc légèrement translucide. La règle de flou de integrations/hyprland/custos.lua
-# devrait y ajouter un effet de verre dépoli, mais le flou des surfaces layer-shell
-# ne prend pas avec Hyprland 0.56 : d'où une opacité assez forte pour rester lisible.
+# Pas de flou : une règle de flou Hyprland sur cette carte a coïncidé avec des gels de
+# l'affichage (Hyprland 0.56). Fond blanc presque opaque pour rester lisible sans lui.
 CSS = f"""
-window.custos-bubble {{ background: transparent; }}
+window.custos-bubble, window.custos-catcher {{ background: transparent; }}
 .card {{
-    background-color: rgba(248, 248, 250, 0.92);
+    background-color: rgba(248, 248, 250, 0.97);
     border: 1px solid rgba(255, 255, 255, 0.7);
     border-radius: 14px;
-    padding: 10px 14px 12px 14px;
+    padding: 8px 10px 12px 14px;
     font-family: "{FONT}", monospace;
     font-size: 10pt;
 }}
@@ -46,19 +48,28 @@ window.custos-bubble {{ background: transparent; }}
 .card .thinking {{ color: rgba(26, 31, 43, 0.5); }}
 .card .error {{ color: #b3402f; }}
 .card scrolledwindow.code {{ background-color: rgba(26, 31, 43, 0.07); border-radius: 8px; }}
-.card label.code {{ padding: 8px 30px 8px 10px; }}
+.card label.code {{ padding: 8px 32px 8px 10px; }}
 .card .divider {{ background-color: rgba(26, 31, 43, 0.1); min-height: 1px; }}
 .card button.icon {{
     background: none;
     border: none;
     box-shadow: none;
-    color: rgba(26, 31, 43, 0.45);
-    padding: 0 3px;
-    min-height: 0;
-    min-width: 0;
+    border-radius: 8px;
+    color: rgba(26, 31, 43, 0.55);
+    font-size: 1.15em;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0;
 }}
-.card button.icon:hover {{ color: #1a1f2b; }}
-.card .codeblock button.copy {{ margin: 4px; opacity: 0; transition: opacity 120ms ease-out; }}
+.card button.icon:hover {{ background-color: rgba(26, 31, 43, 0.08); color: #1a1f2b; }}
+.card .codeblock button.copy {{
+    font-size: 1em;
+    min-width: 24px;
+    min-height: 24px;
+    margin: 4px;
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+}}
 .card .codeblock:hover button.copy {{ opacity: 1; }}
 .card scrolledwindow:not(.code), .card viewport {{ background: transparent; }}
 .card entry {{
@@ -79,12 +90,42 @@ THINKING_FRAMES = ["● ○ ○", "○ ● ○", "○ ○ ●"]
 
 
 def _icon_button(label: str, tooltip: str, on_click: Callable[..., None], *extra_classes: str) -> Gtk.Button:
-    button = Gtk.Button(label=label, tooltip_text=tooltip, valign=Gtk.Align.START)
+    button = Gtk.Button(label=label, tooltip_text=tooltip, valign=Gtk.Align.CENTER)
     button.add_css_class("icon")
     for css_class in extra_classes:
         button.add_css_class(css_class)
     button.connect("clicked", on_click)
     return button
+
+
+class OutsideCatcher:
+    """Surface transparente plein écran, juste sous la carte : un clic dessus la ferme.
+
+    Ce clic ne va pas à la fenêtre en dessous (comme pour un menu). La surface n'existe
+    que tant que la carte est ouverte : restée seule, elle bloquerait tous les clics.
+    """
+
+    def __init__(self, app: Gtk.Application, on_click: Callable[[], None]) -> None:
+        self.window = Gtk.Window(application=app, title="Custos", decorated=False)
+        self.window.add_css_class("custos-catcher")
+        LayerShell.init_for_window(self.window)
+        LayerShell.set_namespace(self.window, "custos-catcher")
+        LayerShell.set_layer(self.window, LayerShell.Layer.OVERLAY)
+        LayerShell.set_keyboard_mode(self.window, LayerShell.KeyboardMode.NONE)
+        LayerShell.set_exclusive_zone(self.window, -1)
+        for edge in (LayerShell.Edge.TOP, LayerShell.Edge.BOTTOM, LayerShell.Edge.LEFT, LayerShell.Edge.RIGHT):
+            LayerShell.set_anchor(self.window, edge, True)
+        self.window.set_child(Gtk.Box(hexpand=True, vexpand=True))
+        click = Gtk.GestureClick(button=0)  # n'importe quel bouton
+        click.connect("pressed", lambda *_: on_click())
+        self.window.add_controller(click)
+
+    def show(self) -> None:
+        if not self.window.get_visible():
+            self.window.present()
+
+    def hide(self) -> None:
+        self.window.set_visible(False)
 
 
 class Bubble:
@@ -94,22 +135,31 @@ class Bubble:
         on_submit: Callable[[str], None],
         on_close: Callable[[], None],
         on_open_full: Callable[[], None],
+        on_new: Callable[[], None],
     ) -> None:
         self.on_submit = on_submit
         self.on_close = on_close
         self.on_open_full = on_open_full
+        self.on_new = on_new
         self.question = ""
         self.answer = ""
+        self.summary = ""
         self.thinking = False
         self._thinking_frame = 0
         self._thinking_timer = 0
+        self._render_pending = 0
+        self._height: tuple[bool, int] | None = None
+        self._placement: Placement | None = None
 
+        self.catcher = OutsideCatcher(app, self.close)
         self.window = Gtk.Window(application=app, title="Custos", decorated=False)
         self.window.add_css_class("custos-bubble")
         LayerShell.init_for_window(self.window)
         LayerShell.set_namespace(self.window, "custos-bubble")
         LayerShell.set_layer(self.window, LayerShell.Layer.OVERLAY)
-        self._set_keyboard(False)
+        # Le clavier reste sur la carte tant qu'elle est ouverte (Échap, réponse directe) :
+        # pas de piège, puisqu'un clic en dehors la ferme.
+        LayerShell.set_keyboard_mode(self.window, LayerShell.KeyboardMode.EXCLUSIVE)
         LayerShell.set_exclusive_zone(self.window, -1)  # coordonnées de l'écran entier
         LayerShell.set_anchor(self.window, LayerShell.Edge.LEFT, True)
 
@@ -122,20 +172,20 @@ class Bubble:
     # --- construction -------------------------------------------------------
 
     def _build(self) -> None:
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         card.add_css_class("card")
         card.set_size_request(WIDTH, -1)
 
-        # En-tête : ta question (ou ce que Custos a lu), à gauche ; ↗ et ✕ à droite.
-        header = Gtk.Box(spacing=4)
+        # En-tête : ta question (ou ce que Custos a lu), à gauche ; ＋ ↗ ✕ à droite.
+        header = Gtk.Box(spacing=2)
         self.info = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
         self.info.set_max_width_chars(1)  # sinon un texte tronqué réclame quand même toute sa largeur
-        self.summary = ""
+        self.new_button = _icon_button("＋", "Nouvelle conversation", lambda *_: self.on_new())
         self.open_button = _icon_button(
             "↗", "Ouvrir la conversation en grand", lambda *_: self.on_open_full()
         )
-        self.open_button.set_visible(False)
         header.append(self.info)
+        header.append(self.new_button)
         header.append(self.open_button)
         header.append(_icon_button("✕", "Fermer (Échap)", lambda *_: self.close()))
 
@@ -144,6 +194,7 @@ class Bubble:
         self.scroll.set_propagate_natural_height(True)
         self.scroll.set_max_content_height(MAX_HEIGHT)
         self.scroll.set_child(self.blocks)
+        self.scroll.set_margin_end(4)
 
         self.thinking_label = Gtk.Label(xalign=0, visible=False)
         self.thinking_label.add_css_class("thinking")
@@ -153,7 +204,9 @@ class Bubble:
 
         self.divider = Gtk.Box(visible=False)
         self.divider.add_css_class("divider")
+        self.divider.set_margin_end(4)
         self.entry = Gtk.Entry(placeholder_text="Demande à Custos…", hexpand=True)
+        self.entry.set_margin_end(4)
         self.entry.connect("activate", self._on_activate)
 
         for widget in (header, self.scroll, self.thinking_label, self.error, self.divider, self.entry):
@@ -185,6 +238,7 @@ class Bubble:
         scroller.add_css_class("code")
         copy = _icon_button("⧉", "Copier", lambda button: self._on_copy(button, code), "copy")
         copy.set_halign(Gtk.Align.END)
+        copy.set_valign(Gtk.Align.START)
         block = Gtk.Overlay(child=scroller)
         block.add_overlay(copy)
         block.add_css_class("codeblock")
@@ -193,13 +247,11 @@ class Bubble:
     # --- API utilisée par la mascotte --------------------------------------
 
     def place(self, placement: Placement) -> None:
-        """Positionne la bulle à côté de la mascotte (voir position.bubble_placement)."""
-        top = placement.edge == "top"
-        LayerShell.set_anchor(self.window, LayerShell.Edge.TOP, top)
-        LayerShell.set_anchor(self.window, LayerShell.Edge.BOTTOM, not top)
-        LayerShell.set_margin(self.window, LayerShell.Edge.LEFT, placement.left)
-        edge = LayerShell.Edge.TOP if top else LayerShell.Edge.BOTTOM
-        LayerShell.set_margin(self.window, edge, placement.margin)
+        """Retient où poser la carte (voir position.bubble_placement) ; appliqué à l'ouverture,
+        ou tout de suite si elle est ouverte. Rien à faire tant qu'elle est cachée."""
+        self._placement = placement
+        if self.visible:
+            self._apply_placement()
 
     @property
     def visible(self) -> bool:
@@ -207,24 +259,28 @@ class Bubble:
 
     def open_prompt(self, summary: str, hint: str) -> None:
         """Nouvelle conversation : juste une ligne pour demander."""
-        self.question, self.answer = "", ""
+        self.question, self.answer, self.summary = "", "", summary
         self._set_thinking(False)
-        self.summary = summary
-        self.open_button.set_visible(False)
         self._show_error("")
         self.entry.set_text("")
         self.entry.set_placeholder_text(hint)
         self._render()
-        self._set_keyboard(True)
-        self.window.present()
-        self.entry.grab_focus()
+        self._show()
+
+    def reopen(self, summary: str, question: str, answer: str) -> None:
+        """Conversation reprise : la dernière réponse, prête pour une question de suivi."""
+        self.question, self.answer, self.summary = question, answer, summary
+        self._set_thinking(False)
+        self._show_error("")
+        self.entry.set_text("")
+        self.entry.set_placeholder_text("Répondre…")
+        self._render(from_top=True)
+        self._show()
 
     def start_answer(self, question: str) -> None:
         if not self.visible:
-            # Question venue de `custos ask "…"` : la bulle s'ouvre directement sur la réponse.
+            # Question venue de `custos ask "…"` : la carte s'ouvre directement sur la réponse.
             self.summary = ""
-            self.open_button.set_visible(False)
-            self.window.present()
         # Une question de suivi remplace la réponse affichée : la conversation complète
         # reste dans la session Claude, à ouvrir en grand avec ↗.
         self.question, self.answer = question, ""
@@ -232,19 +288,18 @@ class Bubble:
         self._show_error("")
         self._set_thinking(True)
         self._render()
+        self._show()
 
     def append_answer(self, text: str) -> None:
         self.answer += text
-        self._render()
+        if not self._render_pending:
+            self._render_pending = GLib.timeout_add(RENDER_INTERVAL, self._flush_render)
 
     def end_answer(self, answer: str) -> None:
         self._set_thinking(False)
         self.answer = answer
-        self.open_button.set_visible(True)
         self.entry.set_placeholder_text("Répondre…")
         self._render(from_top=True)
-        # La réponse reste affichée sans bloquer le clavier : un clic sur la bulle le reprend.
-        self._set_keyboard(False)
 
     def show_error(self, text: str) -> None:
         self._set_thinking(False)
@@ -252,25 +307,38 @@ class Bubble:
             self.question = ""  # question restée sans réponse
         self._show_error(text)
         self._render()
-        if not self.visible:
-            self.window.present()
+        self._show()
 
     def close(self) -> None:
+        self.catcher.hide()  # toujours, même si la carte était déjà cachée
         if not self.visible:
             return
         self.window.set_visible(False)
-        self._set_keyboard(False)
         self._set_thinking(False)
+        self._cancel_pending_render()
         self.question, self.answer = "", ""
         self.on_close()
 
     # --- interne -------------------------------------------------------------
 
-    def _set_keyboard(self, exclusive: bool) -> None:
-        # EXCLUSIVE pour taper dès l'ouverture ; ON_DEMAND ensuite pour ne pas
-        # confisquer le clavier pendant qu'on lit la réponse.
-        mode = LayerShell.KeyboardMode.EXCLUSIVE if exclusive else LayerShell.KeyboardMode.ON_DEMAND
-        LayerShell.set_keyboard_mode(self.window, mode)
+    def _show(self) -> None:
+        if self.visible:
+            return
+        self._apply_placement()
+        # La couche « clic en dehors » d'abord, la carte ensuite : la carte passe au-dessus.
+        self.catcher.show()
+        self.window.present()
+        self.entry.grab_focus()
+
+    def _apply_placement(self) -> None:
+        if not self._placement:
+            return
+        top = self._placement.edge == "top"
+        LayerShell.set_anchor(self.window, LayerShell.Edge.TOP, top)
+        LayerShell.set_anchor(self.window, LayerShell.Edge.BOTTOM, not top)
+        LayerShell.set_margin(self.window, LayerShell.Edge.LEFT, self._placement.left)
+        edge = LayerShell.Edge.TOP if top else LayerShell.Edge.BOTTOM
+        LayerShell.set_margin(self.window, edge, self._placement.margin)
 
     def _show_error(self, text: str) -> None:
         self.error.set_text(text)
@@ -289,9 +357,20 @@ class Bubble:
         self.thinking_label.set_text(THINKING_FRAMES[self._thinking_frame])
         return GLib.SOURCE_CONTINUE
 
+    def _flush_render(self) -> bool:
+        self._render_pending = 0
+        self._render()
+        return GLib.SOURCE_REMOVE
+
+    def _cancel_pending_render(self) -> None:
+        if self._render_pending:
+            GLib.source_remove(self._render_pending)
+            self._render_pending = 0
+
     def _render(self, from_top: bool = False) -> None:
         """Redessine la carte. Pendant l'arrivée de la réponse, on suit sa fin ; une fois
         terminée (`from_top`), on revient à son début pour la lire dans l'ordre."""
+        self._cancel_pending_render()
         if self.question:
             self.info.set_text(f"› {self.question}")
             self.info.remove_css_class("context")
@@ -300,6 +379,9 @@ class Bubble:
             self.info.set_text(self.summary)
             self.info.remove_css_class("question")
             self.info.add_css_class("context")
+        has_answer = bool(self.answer.strip()) and not self.thinking
+        self.new_button.set_visible(has_answer)
+        self.open_button.set_visible(has_answer)
 
         while child := self.blocks.get_first_child():
             self.blocks.remove(child)
@@ -307,29 +389,34 @@ class Bubble:
             self.blocks.append(self._code_widget(content) if kind == "code" else self._text_widget(content))
         self.scroll.set_visible(bool(self.answer.strip()))
 
-        waiting = self.thinking and not self.answer
         self.thinking_label.set_text(THINKING_FRAMES[self._thinking_frame])
-        self.thinking_label.set_visible(waiting)
+        self.thinking_label.set_visible(self.thinking and not self.answer)
         # Pendant la réponse, pas de champ : il revient (« Répondre… ») une fois qu'elle est finie.
         self.entry.set_visible(not self.thinking)
         self.divider.set_visible(bool(self.answer) and not self.thinking)
+        if not self.thinking:
+            self.entry.grab_focus()
         GLib.idle_add(self._fit_and_scroll, from_top)
 
     def _fit_and_scroll(self, from_top: bool) -> bool:
         # Une fenêtre GTK ne suit pas d'elle-même la taille naturelle de son contenu
         # après le premier affichage : on impose la hauteur de la réponse (plafonnée),
         # puis on redemande la plus petite taille possible pour qu'elle rétrécisse aussi.
+        # Seulement quand la hauteur change, pour ne pas solliciter le compositeur pour rien.
         width = self.blocks.get_width() or WIDTH - 28
         _minimum, natural, _, _ = self.blocks.measure(Gtk.Orientation.VERTICAL, width)
-        # Défilement seulement pour une longue réponse : sinon la zone garde une hauteur
-        # minimale et laisse un vide sous une réponse d'une ligne.
         long_answer = natural > MAX_HEIGHT
-        self.scroll.set_policy(
-            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC if long_answer else Gtk.PolicyType.NEVER
-        )
-        self.scroll.set_min_content_height(MAX_HEIGHT if long_answer else -1)
-        self.window.set_default_size(-1, -1)
-        self.window.queue_resize()
+        height = (long_answer, MAX_HEIGHT if long_answer else natural)
+        if height != self._height:
+            self._height = height
+            # Défilement seulement pour une longue réponse : sinon la zone garde une
+            # hauteur minimale et laisse un vide sous une réponse d'une ligne.
+            self.scroll.set_policy(
+                Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC if long_answer else Gtk.PolicyType.NEVER
+            )
+            self.scroll.set_min_content_height(MAX_HEIGHT if long_answer else -1)
+            self.window.set_default_size(-1, -1)
+            self.window.queue_resize()
         adjustment = self.scroll.get_vadjustment()
         adjustment.set_value(adjustment.get_lower() if from_top else adjustment.get_upper())
         return GLib.SOURCE_REMOVE

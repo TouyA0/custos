@@ -64,9 +64,11 @@ ensuite ; une fenêtre simplement maximisée ne la cache pas (`hide_in_fullscree
 
 Un clic sur la mascotte (ou `custos ask`) ouvre une petite carte : tape ta question,
 Entrée, et seule la réponse s'affiche, au fil de l'eau. « Répondre… » pose une question
-de suivi (la réponse affichée est remplacée, Claude garde le fil). Le bouton ↗ (ou
-`custos open`) ouvre la conversation complète en grand : Claude Code dans un terminal,
-avec `claude --resume`. Échap ou ✕ ferme la carte.
+de suivi (la réponse affichée est remplacée, Claude garde le fil). Rouvrir la carte dans
+les 10 minutes reprend la conversation ; ＋ en démarre une nouvelle. ↗ (ou `custos open`)
+ouvre la conversation complète en grand : Claude Code dans un terminal, avec
+`claude --resume`. Un clic en dehors de la carte, Échap ou ✕ la ferment (et arrêtent une
+réponse en cours).
 
 Custos remarque aussi, localement et sans appeler Claude, ce que tu pourrais vouloir lui
 montrer : un texte sélectionné (📋), une image copiée ou une capture `SUPER + SHIFT + S`

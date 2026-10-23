@@ -72,3 +72,16 @@ def test_cleanup_removes_screenshot(tmp_path: Path) -> None:
     ctx.cleanup()
     assert not shot.exists()
     assert ctx.screenshot is None
+
+
+@pytest.mark.parametrize(
+    ("window_class", "name"),
+    [("com.anthropic.Claude", "Claude"), ("brave-browser", "Brave browser"), ("foot", "Foot")],
+)
+def test_app_name(window_class: str, name: str) -> None:
+    assert context.app_name(window_class) == name
+
+
+def test_describe_says_nothing_for_plain_active_window() -> None:
+    assert context.describe(Context(window=WINDOW)) == ""
+    assert context.describe(Context(window=WINDOW, screenshot=Path("/tmp/x.png"))) == "capture de Foot"
