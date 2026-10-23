@@ -35,6 +35,8 @@ class UI(Protocol):
     def show_error(self, text: str) -> None: ...
     def show_notice(self, kind: str | None) -> None: ...
     def set_hidden(self, hidden: bool) -> None: ...
+    def attach(self, window: hyprland.ActiveWindow) -> None: ...
+    def detach(self) -> None: ...
 
 
 @dataclass
@@ -63,6 +65,7 @@ class Daemon:
         self._failure_at = 0.0
         self.notice: Notice | None = None
         self.hidden = False  # mascotte masquée par une fenêtre en plein écran
+        self.attached: str | None = None  # adresse de la fenêtre où la mascotte est accrochée
         self._last_selection_hash: int | None = None
         self._busy = threading.Lock()  # une seule question à Claude à la fois
 
@@ -72,6 +75,10 @@ class Daemon:
                 self.ask(message)
             case "shell-event":
                 self.shell_event(message)
+            case "attach":
+                self.attach_active()
+            case "detach":
+                self.ui.detach()
             case other:
                 log.warning("type de message inconnu : %s", other)
 
@@ -81,13 +88,16 @@ class Daemon:
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
             return
         image = message.get("image")
+        target = self._attached_window(message)
         ctx = context.collect(
             self.config.privacy,
             selection=bool(message.get("selection")),
-            screenshot=bool(message.get("screen")),
+            screenshot=bool(message.get("screen")) or target is not None,
             failure=message.get("failure"),
             image=Path(image) if image else None,
             image_kind=message.get("image_kind", "window"),
+            window=target,
+            attached=target is not None,
         )
         if ctx.blocked:
             self.ui.show_error("Cette fenêtre est protégée : je n'ai rien lu.")
@@ -142,6 +152,29 @@ class Daemon:
             self._last_selection_hash = hash(text)
         self.notice = Notice(kind, time.monotonic(), path)
         self.ui.show_notice(kind)
+
+    def _attached_window(self, message: dict) -> hyprland.ActiveWindow | None:
+        """Fenêtre accrochée à lire, pour une question « simple » (sans sélection, image ni erreur)."""
+        if not self.attached or any(message.get(k) for k in ("selection", "image", "failure")):
+            return None
+        return hyprland.find_window(self.attached)
+
+    def attach_active(self) -> None:
+        """`custos attach` : accroche la mascotte à la fenêtre active."""
+        window = hyprland.active_window()
+        if window is None or not window.address:
+            self.ui.show_error("Aucune fenêtre active à laquelle m'accrocher.")
+            return
+        self.ui.attach(window)  # l'overlay rappelle set_attached une fois accrochée
+
+    def set_attached(self, window: hyprland.ActiveWindow | None) -> None:
+        """Appelé par l'overlay quand la mascotte s'accroche ou se détache."""
+        if window and privacy.is_blocked(window.window_class, self.config.privacy.blocked_classes):
+            self.ui.detach()
+            self.ui.show_error("Cette fenêtre est protégée : je ne m'y accroche pas.")
+            return
+        self.attached = window.address if window else None
+        log.info("accrochée à une fenêtre" if window else "détachée")
 
     def on_hyprland_event(self, name: str, _data: str = "") -> None:
         """Masque la mascotte tant que la fenêtre active est en plein écran (vidéo, jeu…)."""

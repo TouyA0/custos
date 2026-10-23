@@ -46,6 +46,12 @@ sélections ou commandes : seulement des événements, des tailles et des durée
 Glisse la mascotte où tu veux : sa position est mémorisée (`~/.local/state/custos/position.json` ;
 supprime ce fichier puis `custos restart` pour revenir au coin choisi dans la config).
 
+Clic droit sur la mascotte : **S'accrocher** à la fenêtre où tu étais (ou `custos attach`).
+Elle se pose dans son coin, la suit, se cache quand elle n'est pas sur l'espace de travail
+affiché, et chaque question inclut une capture de cette fenêtre, même si une autre a le
+focus. La glisser hors de la fenêtre (ou `custos detach`) la détache ; elle se détache aussi
+quand la fenêtre se ferme. Le menu permet aussi de la remettre dans le coin.
+
 Elle disparaît quand une fenêtre passe en plein écran (vidéo, jeu, présentation) et revient
 ensuite ; une fenêtre simplement maximisée ne la cache pas (`hide_in_fullscreen` dans la config).
 
@@ -84,7 +90,7 @@ Puis `hyprctl reload`. Un hook bash existe aussi : `integrations/shell/custos.ba
 
 ```
 src/custos/
-├── cli.py          commandes `custos daemon | start | stop | ask …`
+├── cli.py          commandes `custos daemon | start | stop | ask | attach …`
 ├── supervisor.py   relance du daemon s'il plante, fichier de log, start/stop/status
 ├── daemon.py       boucle principale
 ├── ipc.py          socket Unix entre les commandes et le daemon

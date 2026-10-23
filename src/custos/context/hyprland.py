@@ -74,6 +74,8 @@ class ActiveWindow:
     y: int
     width: int
     height: int
+    address: str = ""
+    workspace: int = 0
 
     @property
     def geometry(self) -> str:
@@ -91,12 +93,39 @@ def parse(data: dict) -> ActiveWindow | None:
         y=data["at"][1],
         width=data["size"][0],
         height=data["size"][1],
+        address=data.get("address", ""),
+        workspace=(data.get("workspace") or {}).get("id", 0),
     )
 
 
 def active_window() -> ActiveWindow | None:
     data = request("activewindow")
     return parse(data) if isinstance(data, dict) else None
+
+
+def find_window(address: str) -> ActiveWindow | None:
+    """Fenêtre par son adresse Hyprland, ou None si elle a été fermée."""
+    clients = request("clients")
+    if not isinstance(clients, list):
+        return None
+    for client in clients:
+        if client.get("address") == address and client.get("mapped", True):
+            return parse(client)
+    return None
+
+
+def visible_workspaces() -> set[int]:
+    """Espaces de travail affichés en ce moment (normal et spécial, sur chaque écran)."""
+    monitors = request("monitors")
+    if not isinstance(monitors, list):
+        return set()
+    ids = set()
+    for monitor in monitors:
+        for key in ("activeWorkspace", "specialWorkspace"):
+            workspace_id = (monitor.get(key) or {}).get("id", 0)
+            if workspace_id:
+                ids.add(workspace_id)
+    return ids
 
 
 def is_fullscreen(window: dict | None) -> bool:

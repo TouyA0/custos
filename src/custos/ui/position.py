@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from custos.supervisor import state_dir
 
+ATTACH_MARGIN = 12  # écart avec le coin de la fenêtre quand on vient de l'accrocher
 BUBBLE_GAP = 4  # écart entre la mascotte et la bulle
 SCREEN_MARGIN = 8  # la bulle ne colle jamais au bord de l'écran
 
@@ -46,6 +47,50 @@ def bubble_placement(x: int, y: int, canvas: int, bubble_width: int, width: int,
     if y + canvas / 2 > height / 2:
         return Placement(left, "bottom", height - y + BUBBLE_GAP)
     return Placement(left, "top", y + canvas + BUBBLE_GAP)
+
+
+@dataclass(frozen=True)
+class Rect:
+    """Fenêtre, en coordonnées de l'écran (comme la mascotte)."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+    @property
+    def right(self) -> int:
+        return self.x + self.width
+
+    @property
+    def bottom(self) -> int:
+        return self.y + self.height
+
+
+def inside(x: int, y: int, canvas: int, window: Rect) -> bool:
+    """Le centre de la mascotte est dans la fenêtre."""
+    cx, cy = x + canvas / 2, y + canvas / 2
+    return window.x <= cx <= window.right and window.y <= cy <= window.bottom
+
+
+def attached_offset(x: int, y: int, canvas: int, window: Rect) -> tuple[int, int]:
+    """Écart entre la mascotte et le coin bas-droit de la fenêtre, à conserver.
+
+    Mesuré depuis ce coin pour qu'elle y reste collée quand la fenêtre change de
+    taille. Si elle n'est pas sur la fenêtre, elle va se poser dans ce coin.
+    """
+    if inside(x, y, canvas, window):
+        return window.right - x, window.bottom - y
+    return canvas + ATTACH_MARGIN, canvas + ATTACH_MARGIN
+
+
+def attached_position(offset: tuple[int, int], canvas: int, window: Rect) -> tuple[int, int]:
+    """Position de la mascotte accrochée, toujours dans la fenêtre."""
+    x = window.right - offset[0]
+    y = window.bottom - offset[1]
+    x = max(window.x, min(x, window.right - canvas))
+    y = max(window.y, min(y, window.bottom - canvas))
+    return x, y
 
 
 def _state_file():

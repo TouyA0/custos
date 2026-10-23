@@ -45,6 +45,7 @@ BADGE_FILL = Gdk.RGBA(red=0.937, green=0.914, blue=0.875, alpha=1.0)  # crème #
 BADGE_BORDER = Gdk.RGBA(red=0.122, green=0.176, blue=0.310, alpha=1.0)  # marine #1f2d4f
 BADGE_ICONS = {"selection": "📋", "clipboard-image": "🖼\ufe0f", "screenshot": "🖼\ufe0f"}
 
+FOLLOW_INTERVAL = 200  # ms entre deux lectures de la position de la fenêtre accrochée
 DRAG_THRESHOLD = 6  # pixels : en dessous, c'est un clic
 FALLBACK_SCREEN = (1920, 1080)  # si Hyprland ne répond pas
 
@@ -171,12 +172,24 @@ class MascotWidget(Gtk.Widget):
         snapshot.restore()
 
 
+def _short_name(window: hyprland.ActiveWindow, limit: int = 32) -> str:
+    """Nom lisible d'une fenêtre pour le menu : son titre, sinon sa classe."""
+    name = window.title or window.window_class
+    return name if len(name) <= limit else name[: limit - 1] + "…"
+
+
 class MascotOverlay:
     def __init__(self, app: Gtk.Application, config: MascotConfig) -> None:
         folder = Path(config.sprites_dir).expanduser() if config.sprites_dir else DEFAULT_SPRITES
         self.app = app
+        self.config = config
         self.animator = Animator(config.sleep_after, now=time.monotonic())
         self._notice_timer = 0
+        self.attached: str | None = None  # adresse Hyprland de la fenêtre suivie
+        self._attach_offset = (0, 0)
+        self._follow_timer = 0
+        self._hidden_fullscreen = False
+        self._hidden_offscreen = False  # fenêtre accrochée sur un autre espace de travail
 
         self.window = Gtk.Window(application=app, title="Custos", decorated=False)
         self.window.add_css_class("custos")
@@ -203,10 +216,8 @@ class MascotOverlay:
         self.canvas = round(config.size * (1 + 2 * PADDING))
         monitor = hyprland.focused_monitor()
         self.screen = (monitor.width, monitor.height) if monitor else FALLBACK_SCREEN
-        x, y = position.load() or position.default_position(
-            config.position, config.margin, self.canvas, *self.screen
-        )
-        self.move_to(x, y)
+        self.origin = (monitor.x, monitor.y) if monitor else (0, 0)
+        self.move_to(*self._free_position())
 
         click = Gtk.GestureClick()
         click.connect("released", self._on_click)
@@ -218,6 +229,7 @@ class MascotOverlay:
         self.widget.add_controller(drag)
         self._drag_start: tuple[tuple[int, int], tuple[int, int]] | None = None
         self._dragged = False
+        self._build_menu()
         self.window.set_child(self.widget)
 
         css = Gtk.CssProvider()
@@ -261,9 +273,20 @@ class MascotOverlay:
         self.move_to(x + dx, y + dy)
 
     def _on_drag_end(self, *_args) -> None:
-        if self._drag_start and (self.x, self.y) != self._drag_start[1]:
-            position.save(self.x, self.y)
+        moved = self._drag_start and (self.x, self.y) != self._drag_start[1]
         self._drag_start = None
+        if not moved:
+            return
+        if self.attached:
+            window = hyprland.find_window(self.attached)
+            if window and position.inside(self.x, self.y, self.canvas, self._rect(window)):
+                # Déplacée dans la fenêtre : elle garde ce nouvel emplacement.
+                self._attach_offset = position.attached_offset(
+                    self.x, self.y, self.canvas, self._rect(window)
+                )
+                return
+            self.detach(move_back=False)  # glissée hors de la fenêtre : on la détache
+        position.save(self.x, self.y)
 
     def _on_click(self, *_args) -> None:
         if self._dragged:
@@ -277,8 +300,116 @@ class MascotOverlay:
             self.set_state(MascotState.IDLE)
 
     def set_hidden(self, hidden: bool) -> None:
+        self._hidden_fullscreen = hidden
+        self._update_visibility()
+
+    def _update_visibility(self) -> None:
         # Seule la mascotte disparaît : une bulle ouverte reste là où tu l'as laissée.
-        self.window.set_visible(not hidden)
+        self.window.set_visible(not (self._hidden_fullscreen or self._hidden_offscreen))
+
+    # --- accrochage à une fenêtre ----------------------------------------------
+
+    def _rect(self, window: hyprland.ActiveWindow) -> position.Rect:
+        """Fenêtre en coordonnées de l'écran de la mascotte."""
+        return position.Rect(
+            window.x - self.origin[0], window.y - self.origin[1], window.width, window.height
+        )
+
+    def _free_position(self) -> tuple[int, int]:
+        return position.load() or position.default_position(
+            self.config.position, self.config.margin, self.canvas, *self.screen
+        )
+
+    def attach(self, window: hyprland.ActiveWindow) -> None:
+        self.attached = window.address
+        self._attach_offset = position.attached_offset(self.x, self.y, self.canvas, self._rect(window))
+        if not self._follow_timer:
+            self._follow_timer = GLib.timeout_add(FOLLOW_INTERVAL, self._follow)
+        self._follow()
+        self.app.on_attached(window)
+
+    def detach(self, move_back: bool = True) -> None:
+        """Libère la mascotte ; `move_back` la ramène à sa dernière position libre."""
+        if not self.attached:
+            return
+        self.attached = None
+        if self._follow_timer:
+            GLib.source_remove(self._follow_timer)
+            self._follow_timer = 0
+        self._hidden_offscreen = False
+        self._update_visibility()
+        if move_back:
+            self.move_to(*self._free_position())
+        self.app.on_attached(None)
+
+    def _follow(self) -> bool:
+        """Suit la fenêtre accrochée (déplacement, taille, espace de travail, fermeture)."""
+        if not self.attached:
+            return GLib.SOURCE_REMOVE
+        if self._drag_start:
+            return GLib.SOURCE_CONTINUE  # tu la déplaces : on ne la ramène pas
+        window = hyprland.find_window(self.attached)
+        if window is None:
+            self._follow_timer = 0  # ce minuteur s'arrête en renvoyant SOURCE_REMOVE
+            self.detach()
+            return GLib.SOURCE_REMOVE
+        offscreen = window.workspace not in hyprland.visible_workspaces()
+        if offscreen != self._hidden_offscreen:
+            self._hidden_offscreen = offscreen
+            self._update_visibility()
+        if not offscreen:
+            x, y = position.attached_position(self._attach_offset, self.canvas, self._rect(window))
+            if (x, y) != (self.x, self.y):
+                self.move_to(x, y)
+        return GLib.SOURCE_CONTINUE
+
+    # --- menu du clic droit ------------------------------------------------------
+
+    def _build_menu(self) -> None:
+        actions = Gio.SimpleActionGroup()
+        for name, callback in (
+            ("attach", self._attach_candidate),
+            ("detach", self.detach),
+            ("reset", self._reset_position),
+        ):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", lambda *_args, callback=callback: callback())
+            actions.add_action(action)
+        self.widget.insert_action_group("mascot", actions)
+
+        self.menu = Gtk.PopoverMenu(has_arrow=False)
+        self.menu.set_parent(self.widget)
+        right_click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+        right_click.connect("pressed", self._on_right_click)
+        self.widget.add_controller(right_click)
+        self._candidate: hyprland.ActiveWindow | None = None
+
+    def _on_right_click(self, _gesture, _n_press: int, x: float, y: float) -> None:
+        model = Gio.Menu()
+        if self.attached:
+            window = hyprland.find_window(self.attached)
+            name = _short_name(window) if window else "la fenêtre"
+            model.append(f"Se détacher de « {name} »", "mascot.detach")
+        else:
+            # La mascotte ne prend jamais le focus : la fenêtre active est celle où tu étais.
+            self._candidate = hyprland.active_window()
+            if self._candidate and self._candidate.address:
+                model.append(f"S'accrocher à « {_short_name(self._candidate)} »", "mascot.attach")
+        model.append("Remettre dans le coin", "mascot.reset")
+        self.menu.set_menu_model(model)
+        target = Gdk.Rectangle()
+        target.x, target.y, target.width, target.height = int(x), int(y), 1, 1
+        self.menu.set_pointing_to(target)
+        self.menu.popup()
+
+    def _attach_candidate(self) -> None:
+        if self._candidate:
+            self.attach(self._candidate)
+
+    def _reset_position(self) -> None:
+        position.forget()
+        self.detach(move_back=False)
+        self.move_to(*self._free_position())
 
     def show_notice(self, kind: str | None, duration: float) -> None:
         self.widget.notice = kind
@@ -314,6 +445,7 @@ class OverlayUI:
         self.app.on_open = lambda: threading.Thread(
             target=daemon.open_from_mascot, daemon=True
         ).start()
+        self.app.on_attached = daemon.set_attached
 
     def _on_gtk_thread(self, action: Callable[[MascotOverlay], None]) -> None:
         def run() -> bool:
@@ -347,6 +479,12 @@ class OverlayUI:
     def set_hidden(self, hidden: bool) -> None:
         self._on_gtk_thread(lambda overlay: overlay.set_hidden(hidden))
 
+    def attach(self, window) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.attach(window))
+
+    def detach(self) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.detach())
+
 
 class MascotApp(Gtk.Application):
     def __init__(self, config: MascotConfig) -> None:
@@ -357,6 +495,7 @@ class MascotApp(Gtk.Application):
         self.on_submit: Callable[[str], None] = lambda question: None
         self.on_close: Callable[[], None] = lambda: None
         self.on_open: Callable[[], None] = lambda: None
+        self.on_attached: Callable[[hyprland.ActiveWindow | None], None] = lambda window: None
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, app: Gtk.Application) -> None:

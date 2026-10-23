@@ -24,6 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     logs.add_argument("-f", "--follow", action="store_true", help="suit le log en direct")
     logs.add_argument("-n", "--lines", type=int, default=50)
 
+    sub.add_parser("attach", help="accroche la mascotte à la fenêtre active")
+    sub.add_parser("detach", help="détache la mascotte de sa fenêtre")
+
     ask = sub.add_parser("ask", help="pose une question à Custos")
     ask.add_argument("question", nargs="?", help="question ; sans argument, ouvre la bulle")
     ask.add_argument("--selection", action="store_true", help="joint le texte sélectionné")
@@ -52,7 +55,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.subcommand == "logs":
             return supervisor.logs(args.follow, args.lines)
 
-        if args.subcommand == "ask":
+        if args.subcommand in ("attach", "detach"):
+            ipc.send({"type": args.subcommand})
+        elif args.subcommand == "ask":
             ipc.send(
                 {
                     "type": "ask",

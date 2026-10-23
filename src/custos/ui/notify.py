@@ -66,3 +66,9 @@ class NotifyUI:
 
     def set_hidden(self, hidden: bool) -> None:
         pass
+
+    def attach(self, window) -> None:
+        self.show_error("Pas de mascotte à accrocher sans l'overlay.")
+
+    def detach(self) -> None:
+        pass

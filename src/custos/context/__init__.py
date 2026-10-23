@@ -20,6 +20,7 @@ class Context:
     screenshot: Path | None = None
     blocked: bool = False  # fenêtre active dans la liste noire : rien n'a été lu
     failure: dict | None = None  # commande shell en échec (message du hook)
+    attached: bool = False  # `window` est la fenêtre où la mascotte est accrochée
     image_kind: str = "window"  # d'où vient `screenshot` : window, clipboard ou screenshot
 
     def cleanup(self) -> None:
@@ -42,13 +43,19 @@ def collect(
     failure: dict | None = None,
     image: Path | None = None,
     image_kind: str = "window",
+    window: ActiveWindow | None = None,
+    attached: bool = False,
 ) -> Context:
-    """Lit le contexte. `image` : image déjà prête (copie temporaire), jointe à la place d'une capture."""
-    window = hyprland.active_window()
+    """Lit le contexte.
+
+    `image` : image déjà prête (copie temporaire), jointe à la place d'une capture.
+    `window` : fenêtre à lire (celle où la mascotte est accrochée) au lieu de la fenêtre active.
+    """
+    window = window or hyprland.active_window()
     if window and privacy.is_blocked(window.window_class, config.blocked_classes):
         return Context(window=window, blocked=True)
 
-    context = Context(window=window, failure=failure)
+    context = Context(window=window, failure=failure, attached=attached)
     if selection:
         text = clipboard.selection()
         if len(text) > MAX_SELECTION:
@@ -68,7 +75,8 @@ def describe(context: Context) -> str:
         command = _short(privacy.redact_secrets(context.failure.get("command", "")))
         parts.append(f"échec : {command} (code {context.failure.get('exit_code')})")
     elif context.window:
-        parts.append(context.window.window_class)
+        prefix = "📌 " if context.attached else ""
+        parts.append(prefix + context.window.window_class)
     if context.selection:
         parts.append(f"sélection : {len(context.selection)} car.")
     if context.screenshot:

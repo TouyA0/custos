@@ -22,6 +22,7 @@ class FakeUI:
         self.errors: list[str] = []
         self.notices: list[str | None] = []
         self.hidden: list[bool] = []
+        self.attached: list = []
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
@@ -46,6 +47,12 @@ class FakeUI:
 
     def set_hidden(self, hidden: bool) -> None:
         self.hidden.append(hidden)
+
+    def attach(self, window) -> None:
+        self.attached.append(window)
+
+    def detach(self) -> None:
+        self.attached.append(None)
 
 
 @pytest.fixture
@@ -229,12 +236,24 @@ def collected(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     """Remplace la collecte du contexte et note ses arguments."""
     calls: list[dict] = []
 
-    def fake_collect(privacy, selection=False, screenshot=False, failure=None, image=None, image_kind="window"):
+    def fake_collect(
+        privacy,
+        selection=False,
+        screenshot=False,
+        failure=None,
+        image=None,
+        image_kind="window",
+        window=None,
+        attached=False,
+    ):
         calls.append(
             {"selection": selection, "screenshot": screenshot, "failure": failure, "image": image}
         )
+        if window:
+            calls[-1]["window"] = window
         return Context(
-            window=WINDOW,
+            window=window or WINDOW,
+            attached=attached,
             failure=failure,
             selection="du texte" if selection else "",
             screenshot=image,
@@ -412,6 +431,62 @@ def test_fullscreen_hiding_can_be_disabled(monkeypatch, ui) -> None:
     config.mascot.hide_in_fullscreen = False
     daemon.Daemon(config, ui).on_hyprland_event("fullscreen", "1")
     assert ui.hidden == []
+
+
+BROWSER = ActiveWindow("brave-browser", "Docs", 71, 21, 1228, 773, address="0xb", workspace=1)
+
+
+def test_attach_command_attaches_active_window(monkeypatch, ui) -> None:
+    monkeypatch.setattr(daemon.hyprland, "active_window", lambda: BROWSER)
+    daemon.Daemon(Config(), ui).handle({"type": "attach"})
+    assert ui.attached == [BROWSER]
+
+
+def test_attached_window_is_captured_even_if_not_active(monkeypatch, ui, collected) -> None:
+    monkeypatch.setattr(daemon.hyprland, "find_window", lambda address: BROWSER)
+    d = daemon.Daemon(Config(), ui)
+    d.set_attached(BROWSER)  # l'overlay confirme l'accrochage
+    d.open_from_mascot()
+    assert collected[0]["window"] == BROWSER
+    assert collected[0]["screenshot"] is True
+    assert ui.prompts[0][0] == "📌 brave-browser"
+
+
+def test_selection_ignores_attached_window(monkeypatch, ui, collected) -> None:
+    monkeypatch.setattr(daemon.hyprland, "find_window", lambda address: BROWSER)
+    d = daemon.Daemon(Config(), ui)
+    d.set_attached(BROWSER)
+    d.handle({"type": "ask", "selection": True})
+    assert "window" not in collected[0]
+    assert collected[0]["screenshot"] is False
+
+
+def test_closed_attached_window_falls_back_to_active(monkeypatch, ui, collected) -> None:
+    monkeypatch.setattr(daemon.hyprland, "find_window", lambda address: None)
+    d = daemon.Daemon(Config(), ui)
+    d.set_attached(BROWSER)
+    d.open_from_mascot()
+    assert "window" not in collected[0]
+    assert collected[0]["screenshot"] is False
+
+
+def test_blocked_window_cannot_be_attached(ui) -> None:
+    config = Config()
+    config.privacy.blocked_classes = ["brave-browser"]
+    d = daemon.Daemon(config, ui)
+    d.set_attached(BROWSER)
+    assert d.attached is None
+    assert ui.attached == [None]  # l'overlay est détaché aussitôt
+    assert "protégée" in ui.errors[0]
+
+
+def test_detach(ui) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.set_attached(BROWSER)
+    d.handle({"type": "detach"})
+    assert ui.attached == [None]
+    d.set_attached(None)  # confirmation de l'overlay
+    assert d.attached is None
 
 
 def test_successful_command_is_ignored(ui) -> None:
