@@ -230,6 +230,10 @@ class Bubble:
 
     # --- API utilisée par la mascotte --------------------------------------
 
+    def set_monitor(self, monitor: Gdk.Monitor) -> None:
+        """Écran de la carte : toujours celui de la mascotte."""
+        LayerShell.set_monitor(self.window, monitor)
+
     def place(self, placement: Placement) -> None:
         """Retient où poser la carte (voir position.bubble_placement) ; appliqué à l'ouverture,
         ou tout de suite si elle est ouverte. Rien à faire tant qu'elle est cachée."""

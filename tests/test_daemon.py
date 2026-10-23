@@ -25,6 +25,7 @@ class FakeUI:
         self.attached: list = []
         self.toggles = 0
         self.reopened: list[tuple[str, str, str]] = []
+        self.monitor_changes = 0
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
@@ -61,6 +62,9 @@ class FakeUI:
 
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self.reopened.append((summary, question, answer))
+
+    def monitors_changed(self) -> None:
+        self.monitor_changes += 1
 
 
 @pytest.fixture
@@ -701,3 +705,14 @@ def test_cli_shell_output_reads_stdin(monkeypatch) -> None:
     assert sent[0]["type"] == "shell-output"
     assert len(sent[0]["output"]) == cli.MAX_OUTPUT
     assert sent[0]["output"].endswith("fin")
+
+
+def test_monitor_events_are_forwarded_and_fullscreen_is_per_monitor(monkeypatch, ui) -> None:
+    monkeypatch.setattr(daemon.hyprland, "fullscreen_on", lambda name: name == "HDMI-A-1")
+    d = daemon.Daemon(Config(), ui)
+    d.on_hyprland_event("monitoraddedv2", "1,HDMI-A-1,")
+    assert ui.monitor_changes == 1
+    d.set_monitor("eDP-1")
+    assert d.hidden is False
+    d.set_monitor("HDMI-A-1")
+    assert ui.hidden == [True]

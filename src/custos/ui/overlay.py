@@ -5,6 +5,7 @@ threads (serveur IPC, appels à Claude) passent par OverlayUI, qui s'y ramène
 avec GLib.idle_add.
 """
 
+import logging
 import math
 import threading
 import time
@@ -35,6 +36,8 @@ from custos.ui.bubble import Bubble
 from custos.ui.position import PADDING
 from custos.ui.tray import Tray
 
+log = logging.getLogger(__name__)
+
 APP_ID = "io.github.touya0.Custos"
 HALO_COLOR = (245, 245, 250)
 HALO_OPACITY = 0.9
@@ -48,10 +51,22 @@ BADGE_ICONS = {"selection": "📋", "clipboard-image": "🖼\ufe0f", "screenshot
 
 FOLLOW_INTERVAL = 200  # ms entre deux lectures de la position de la fenêtre accrochée
 DRAG_THRESHOLD = 6  # pixels : en dessous, c'est un clic
-FALLBACK_SCREEN = (1920, 1080)  # si Hyprland ne répond pas
+FALLBACK_MONITOR = hyprland.Monitor(0, 0, 1920, 1080)  # si Hyprland ne répond pas
+MONITOR_RETRIES = 10  # écran tout juste branché : GTK le découvre parfois après Hyprland
+MONITOR_RETRY_INTERVAL = 300  # ms
 
 DEFAULT_SPRITES = Path(__file__).resolve().parents[3] / "assets" / "sprites"
 DEFAULT_ICON = DEFAULT_SPRITES.parent / "icon.png"
+
+def _gdk_monitor(name: str) -> Gdk.Monitor | None:
+    """Écran GTK correspondant au connecteur Hyprland (« eDP-1 »…)."""
+    monitors = Gdk.Display.get_default().get_monitors()
+    for i in range(monitors.get_n_items()):
+        monitor = monitors.get_item(i)
+        if monitor.get_connector() == name:
+            return monitor
+    return None
+
 
 def is_supported() -> bool:
     return LayerShell.is_supported()
@@ -220,9 +235,12 @@ class MascotOverlay:
         )
 
         self.canvas = round(config.size * (1 + 2 * PADDING))
-        monitor = hyprland.focused_monitor()
-        self.screen = (monitor.width, monitor.height) if monitor else FALLBACK_SCREEN
-        self.origin = (monitor.x, monitor.y) if monitor else (0, 0)
+        # Écran où elle vit : ses coordonnées (self.x, self.y) sont relatives à son coin.
+        self.monitor = FALLBACK_MONITOR
+        self._bound_monitor: str | None = None  # écran GTK auquel les surfaces sont liées
+        self._monitor_retry = 0
+        self._monitor_retries = 0
+        self._use_monitor(self._start_monitor())
         self.move_to(*self._free_position())
 
         click = Gtk.GestureClick()
@@ -235,7 +253,8 @@ class MascotOverlay:
         self.widget.add_controller(drag)
         self._drag_start: tuple[tuple[int, int], tuple[int, int]] | None = None
         self._dragged = False
-        self._drag_windows: list[tuple[hyprland.ActiveWindow, position.Rect]] = []
+        self._drag_windows: list[hyprland.ActiveWindow] = []
+        self._drag_monitors: list[hyprland.Monitor] = []
         self._build_menu()
         self.window.set_child(self.widget)
 
@@ -248,6 +267,14 @@ class MascotOverlay:
     @property
     def state(self) -> MascotState:
         return self.animator.state
+
+    @property
+    def screen(self) -> tuple[int, int]:
+        return self.monitor.width, self.monitor.height
+
+    @property
+    def origin(self) -> tuple[int, int]:
+        return self.monitor.x, self.monitor.y
 
     def set_state(self, state: MascotState) -> None:
         self.animator.set_state(state, time.monotonic())
@@ -267,10 +294,12 @@ class MascotOverlay:
 
     def _on_drag_begin(self, *_args) -> None:
         cursor = hyprland.cursor_position()
-        self._drag_start = (cursor, (self.x, self.y)) if cursor else None
+        # Départ en coordonnées globales : elle peut passer d'un écran à l'autre en chemin.
+        self._drag_start = (cursor, self._global_position()) if cursor else None
         self._dragged = False
-        # Lues une fois : les fenêtres ne bougent pas pendant que tu déplaces la mascotte.
-        self._drag_windows = [(window, self._rect(window)) for window in hyprland.visible_windows()]
+        # Lus une fois : les fenêtres et les écrans ne bougent pas pendant que tu la déplaces.
+        self._drag_windows = hyprland.visible_windows()
+        self._drag_monitors = hyprland.monitors()
 
     def _on_drag_update(self, *_args) -> None:
         cursor = hyprland.cursor_position()
@@ -281,15 +310,24 @@ class MascotOverlay:
         if not self._dragged and abs(dx) + abs(dy) < DRAG_THRESHOLD:
             return  # simple clic, pas un déplacement
         self._dragged = True
-        self.move_to(x + dx, y + dy)
+        # Elle passe sur l'écran où se trouve le curseur.
+        monitor = next((m for m in self._drag_monitors if m.contains(*cursor)), None)
+        if monitor and monitor.name != self.monitor.name:
+            self._use_monitor(monitor)
+        self.move_to(x + dx - self.origin[0], y + dy - self.origin[1])
         # Au-dessus du bord haut d'une fenêtre, elle prend la pose assise : la lâcher là l'y accroche.
         self.animator.sitting = self._drop_target() is not None
 
     def _drop_target(self) -> hyprland.ActiveWindow | None:
-        return position.edge_target(self.x, self.y, self.config.size, self.canvas, self._drag_windows)
+        # Rectangles recalculés : l'écran de la mascotte a pu changer pendant le déplacement.
+        windows = [(window, self._rect(window)) for window in self._drag_windows]
+        return position.edge_target(self.x, self.y, self.config.size, self.canvas, windows)
+
+    def _global_position(self) -> tuple[int, int]:
+        return self.origin[0] + self.x, self.origin[1] + self.y
 
     def _on_drag_end(self, *_args) -> None:
-        moved = self._drag_start and (self.x, self.y) != self._drag_start[1]
+        moved = self._drag_start and self._global_position() != self._drag_start[1]
         self._drag_start = None
         if not moved:
             self.animator.sitting = self.attached is not None
@@ -301,7 +339,7 @@ class MascotOverlay:
             return
         self.detach(move_back=False)  # lâchée ailleurs : elle est libre, là où tu l'as posée
         self.animator.sitting = False
-        position.save(self.x, self.y)
+        position.save(self.x, self.y, self.monitor.name)
 
     def _on_click(self, *_args) -> None:
         if self._dragged:
@@ -338,9 +376,91 @@ class MascotOverlay:
         )
 
     def _free_position(self) -> tuple[int, int]:
-        return position.load() or position.default_position(
+        """Là où tu l'as posée sur cet écran, sinon le coin choisi dans la config."""
+        saved = position.load()
+        if saved and position.load_monitor() in (None, self.monitor.name):
+            return saved
+        return position.default_position(
             self.config.position, self.config.margin, self.canvas, *self.screen
         )
+
+    # --- écrans ------------------------------------------------------------------
+
+    def _start_monitor(self) -> hyprland.Monitor:
+        """Écran où tu l'as posée la dernière fois s'il est branché, sinon l'écran actif."""
+        found = hyprland.monitors()
+        saved = position.load_monitor()
+        return (
+            next((m for m in found if m.name == saved), None)
+            or next((m for m in found if m.focused), None)
+            or (found[0] if found else FALLBACK_MONITOR)
+        )
+
+    def _use_monitor(self, monitor: hyprland.Monitor) -> None:
+        """Installe la mascotte (et la bulle) sur cet écran."""
+        changed = monitor.name != self.monitor.name
+        self.monitor = monitor
+        if monitor.name and monitor.name != self._bound_monitor:
+            gdk_monitor = _gdk_monitor(monitor.name)
+            if gdk_monitor is None:
+                self._retry_monitor_later()
+            else:
+                LayerShell.set_monitor(self.window, gdk_monitor)
+                self.bubble.set_monitor(gdk_monitor)
+                self._bound_monitor = monitor.name
+                self._monitor_retries = 0
+        if changed:
+            log.info("mascotte sur l'écran %s", monitor.name)
+            self.app.on_monitor(monitor.name)
+
+    def _retry_monitor_later(self) -> None:
+        if self._monitor_retry or self._monitor_retries >= MONITOR_RETRIES:
+            return
+        self._monitor_retries += 1
+
+        def retry() -> bool:
+            self._monitor_retry = 0
+            self._use_monitor(self.monitor)
+            return GLib.SOURCE_REMOVE
+
+        self._monitor_retry = GLib.timeout_add(MONITOR_RETRY_INTERVAL, retry)
+
+    def monitors_changed(self) -> None:
+        """Écran branché ou débranché."""
+        found = hyprland.monitors()
+        if not found:
+            return
+        current = next((m for m in found if m.name == self.monitor.name), None)
+        saved = position.load_monitor()
+        home = next((m for m in found if m.name == saved), None)
+        if home and home != current and not self.attached:
+            # Son écran est rebranché : elle y retourne, là où tu l'avais posée.
+            self._use_monitor(home)
+            self.move_to(*self._free_position())
+        elif current is None:
+            # Son écran a disparu : elle passe sur l'écran actif (sans oublier l'autre).
+            self._use_monitor(next((m for m in found if m.focused), found[0]))
+            self.move_to(*self._free_position())
+        else:
+            self._use_monitor(current)  # même écran, peut-être une autre résolution
+            self.move_to(self.x, self.y)
+        if self.attached:
+            self._follow()
+
+    def _follow_monitor(self, window: hyprland.ActiveWindow) -> None:
+        """Fenêtre accrochée passée sur un autre écran : la mascotte la suit."""
+        # Là où elle s'assoit : un peu sous le bord haut, qui peut dépasser de l'écran.
+        x = window.x + max(0, min(self._attach_offset, window.width - self.canvas)) + self.canvas / 2
+        y = window.y + min(window.height / 2, self.canvas)
+        if self.monitor.contains(x, y):
+            return
+        found = hyprland.monitors()
+        # Sinon l'écran où Hyprland range la fenêtre (il tarde parfois pour une fenêtre flottante).
+        monitor = next((m for m in found if m.contains(x, y)), None) or next(
+            (m for m in found if m.id == window.monitor), None
+        )
+        if monitor and monitor.name != self.monitor.name:
+            self._use_monitor(monitor)
 
     def attach(self, window: hyprland.ActiveWindow, offset: int | None = None) -> None:
         """S'assoit sur le bord haut de la fenêtre, à `offset` pixels de son bord gauche.
@@ -394,6 +514,7 @@ class MascotOverlay:
             self._hidden_offscreen = offscreen
             self._update_visibility()
         if not offscreen:
+            self._follow_monitor(window)
             x, y = position.on_edge(
                 self._attach_offset, self.config.size, self.canvas, self._rect(window), self.animator.is_sitting
             )
@@ -488,6 +609,7 @@ class OverlayUI:
             target=daemon.open_from_mascot, daemon=True
         ).start()
         self.app.on_attached = daemon.set_attached
+        self.app.on_monitor = daemon.set_monitor
         self.app.on_open_full = daemon.open_full
         # Lire le contexte appelle hyprctl et wl-paste : hors du thread GTK.
         self.app.on_new = lambda: threading.Thread(target=daemon.new_conversation, daemon=True).start()
@@ -536,6 +658,9 @@ class OverlayUI:
     def toggle_stowed(self) -> None:
         self._on_gtk_thread(lambda overlay: overlay.toggle_stowed())
 
+    def monitors_changed(self) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.monitors_changed())
+
 
 class MascotApp(Gtk.Application):
     def __init__(self, config: MascotConfig) -> None:
@@ -550,6 +675,7 @@ class MascotApp(Gtk.Application):
         self.on_open_full: Callable[[], None] = lambda: None
         self.on_new: Callable[[], None] = lambda: None
         self.on_attached: Callable[[hyprland.ActiveWindow | None], None] = lambda window: None
+        self.on_monitor: Callable[[str], None] = lambda name: None
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, app: Gtk.Application) -> None:

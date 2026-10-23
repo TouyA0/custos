@@ -76,5 +76,8 @@ class NotifyUI:
     def toggle_stowed(self) -> None:
         pass
 
+    def monitors_changed(self) -> None:
+        pass
+
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self.end_answer(answer)

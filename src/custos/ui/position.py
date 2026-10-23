@@ -1,7 +1,7 @@
 """Position de la mascotte à l'écran et placement de la bulle (sans GTK).
 
-Les coordonnées sont relatives au coin haut-gauche de l'écran, en pixels logiques :
-ce sont directement les marges top/left de la surface layer-shell.
+Les coordonnées sont relatives au coin haut-gauche de l'écran où se trouve la mascotte,
+en pixels logiques : ce sont directement les marges top/left de la surface layer-shell.
 """
 
 import json
@@ -130,10 +130,18 @@ def load() -> tuple[int, int] | None:
         return None
 
 
-def save(x: int, y: int) -> None:
+def load_monitor() -> str | None:
+    """Écran où la mascotte a été posée (son connecteur : « HDMI-A-1 »…)."""
+    try:
+        return json.loads(_state_file().read_text()).get("monitor") or None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def save(x: int, y: int, monitor: str = "") -> None:
     path = _state_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"x": x, "y": y}))
+    path.write_text(json.dumps({"x": x, "y": y, "monitor": monitor}))
 
 
 def forget() -> None:

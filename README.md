@@ -62,6 +62,10 @@ Une icône dans la barre (caelestia) permet de la ranger : clic pour la cacher o
 réapparaître, clic droit pour lui poser une question. Aussi via le clic droit sur la mascotte
 (« Se ranger dans la barre ») ou `custos toggle`. Elle reste rangée d'une session à l'autre.
 
+Avec plusieurs écrans, glisse-la d'un écran à l'autre : elle retient celui où tu l'as posée,
+y retourne quand tu le rebranches, et passe sur l'écran actif s'il est débranché. Accrochée,
+elle suit sa fenêtre d'un écran à l'autre.
+
 Elle disparaît quand une fenêtre passe en plein écran (vidéo, jeu, présentation) et revient
 ensuite ; une fenêtre simplement maximisée ne la cache pas (`hide_in_fullscreen` dans la config).
 

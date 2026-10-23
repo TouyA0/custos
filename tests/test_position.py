@@ -131,3 +131,11 @@ def test_most_recent_window_wins_when_overlapping() -> None:
     x, y = position.on_edge(400, SIZE, CANVAS, BOTTOM_LEFT, sitting=True)
     target = position.edge_target(x, y, SIZE, CANVAS, [("flottante", floating), ("bas", BOTTOM_LEFT)])
     assert target == "flottante"
+
+
+def test_save_remembers_monitor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(position, "state_dir", lambda: tmp_path)
+    assert position.load_monitor() is None
+    position.save(10, 20, "HDMI-A-1")
+    assert position.load() == (10, 20)
+    assert position.load_monitor() == "HDMI-A-1"

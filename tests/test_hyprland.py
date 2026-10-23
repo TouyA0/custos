@@ -67,3 +67,13 @@ def test_send_shortcut_falls_back_to_old_syntax(monkeypatch: pytest.MonkeyPatch)
     assert hyprland.send_shortcut("CTRL SHIFT ALT", "F12", "0xabc")
     assert 'window = "address:0xabc"' in sent[0]
     assert sent[1] == "dispatch sendshortcut CTRL SHIFT ALT, F12, address:0xabc"
+
+
+def test_parse_monitor_scale_rotation_and_workspaces() -> None:
+    data = {"id": 1, "name": "HDMI-A-1", "x": 2560, "y": 0, "width": 3840, "height": 2160,
+            "scale": 2, "transform": 1, "focused": True,
+            "activeWorkspace": {"id": 3}, "specialWorkspace": {"id": 0}}
+    monitor = hyprland.parse_monitor(data)
+    assert (monitor.width, monitor.height) == (1080, 1920)
+    assert monitor.workspaces == (3,)
+    assert monitor.contains(2600, 10) and not monitor.contains(100, 10)

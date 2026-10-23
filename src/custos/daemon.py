@@ -23,7 +23,11 @@ log = logging.getLogger(__name__)
 
 MIN_SELECTION = 3  # caractères : en dessous, ce n'est sans doute pas une vraie sélection
 # Événements Hyprland après lesquels le plein écran a pu changer.
-FULLSCREEN_EVENTS = {"fullscreen", "activewindowv2", "workspacev2", "closewindow", "focusedmonv2"}
+FULLSCREEN_EVENTS = {
+    "fullscreen", "activewindowv2", "workspacev2", "closewindow", "focusedmonv2", "movewindowv2",
+    "monitoraddedv2", "monitorremovedv2",
+}
+MONITOR_EVENTS = {"monitoraddedv2", "monitorremovedv2"}  # écran branché ou débranché
 RESUME_WINDOW = 600.0  # secondes : rouvrir la carte dans ce délai reprend la conversation
 RECENT_FAILURE = 30.0  # secondes : même durée que l'inquiétude de la mascotte
 IGNORED_EXIT_CODES = {130, 148}  # Ctrl+C et Ctrl+Z : interrompre n'est pas une erreur
@@ -48,6 +52,7 @@ class UI(Protocol):
     def attach(self, window: hyprland.ActiveWindow) -> None: ...
     def detach(self) -> None: ...
     def toggle_stowed(self) -> None: ...
+    def monitors_changed(self) -> None: ...
 
 
 @dataclass
@@ -80,6 +85,7 @@ class Daemon:
         self._output_requested_at: float | None = None
         self.notice: Notice | None = None
         self.hidden = False  # mascotte masquée par une fenêtre en plein écran
+        self.monitor: str | None = None  # écran où se trouve la mascotte
         self.attached: str | None = None  # adresse de la fenêtre où la mascotte est accrochée
         self._last_selection_hash: int | None = None
         self._busy = threading.Lock()  # une seule question à Claude à la fois
@@ -232,11 +238,24 @@ class Daemon:
         self.attached = window.address if window else None
         log.info("accrochée à une fenêtre" if window else "détachée")
 
+    def set_monitor(self, name: str) -> None:
+        """Appelé par l'overlay quand la mascotte change d'écran."""
+        self.monitor = name
+        self.on_hyprland_event("fullscreen")
+
     def on_hyprland_event(self, name: str, _data: str = "") -> None:
-        """Masque la mascotte tant que la fenêtre active est en plein écran (vidéo, jeu…)."""
+        """Masque la mascotte tant qu'une fenêtre est en plein écran (vidéo, jeu…) sur son écran.
+
+        Suit aussi les écrans branchés ou débranchés.
+        """
+        if name in MONITOR_EVENTS:
+            self.ui.monitors_changed()
         if name not in FULLSCREEN_EVENTS or not self.config.mascot.hide_in_fullscreen:
             return
-        hidden = hyprland.active_is_fullscreen()
+        if self.monitor:
+            hidden = hyprland.fullscreen_on(self.monitor)
+        else:
+            hidden = hyprland.active_is_fullscreen()
         if hidden != self.hidden:
             self.hidden = hidden
             log.info("plein écran : mascotte %s", "masquée" if hidden else "réaffichée")
