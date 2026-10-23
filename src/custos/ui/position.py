@@ -9,7 +9,11 @@ from dataclasses import dataclass
 
 from custos.supervisor import state_dir
 
-ATTACH_MARGIN = 12  # écart avec le coin de la fenêtre quand on vient de l'accrocher
+PADDING = 0.1  # marge autour du sprite dans sa fenêtre (fraction de la taille), pour le flottement
+ATTACH_MARGIN = 12  # écart avec le coin haut-gauche de la fenêtre quand on vient de l'accrocher
+# Hauteurs dans les sprites (fraction de leur taille), mesurées sur les images actuelles :
+SEAT_LINE = 0.76  # sitting/0 : bas du corps, d'où pendent les jambes
+FEET_LINE = 0.96  # sprites debout : dessous des pieds
 BUBBLE_GAP = 4  # écart entre la mascotte et la bulle
 SCREEN_MARGIN = 8  # la bulle ne colle jamais au bord de l'écran
 
@@ -73,24 +77,28 @@ def inside(x: int, y: int, canvas: int, window: Rect) -> bool:
     return window.x <= cx <= window.right and window.y <= cy <= window.bottom
 
 
-def attached_offset(x: int, y: int, canvas: int, window: Rect) -> tuple[int, int]:
-    """Écart entre la mascotte et le coin bas-droit de la fenêtre, à conserver.
+def edge_offset(x: int, canvas: int, window: Rect) -> int:
+    """Distance entre le bord gauche de la fenêtre et la mascotte, posée sur son bord haut."""
+    return max(0, min(x - window.x, window.width - canvas))
 
-    Mesuré depuis ce coin pour qu'elle y reste collée quand la fenêtre change de
-    taille. Si elle n'est pas sur la fenêtre, elle va se poser dans ce coin.
+
+def on_edge(offset: int, size: int, canvas: int, window: Rect, sitting: bool) -> tuple[int, int]:
+    """Position de la mascotte sur le bord haut de la fenêtre.
+
+    Assise : la ligne d'assise du sprite sur le bord, jambes dans la fenêtre.
+    Debout : les pieds sur le bord.
     """
-    if inside(x, y, canvas, window):
-        return window.right - x, window.bottom - y
-    return canvas + ATTACH_MARGIN, canvas + ATTACH_MARGIN
-
-
-def attached_position(offset: tuple[int, int], canvas: int, window: Rect) -> tuple[int, int]:
-    """Position de la mascotte accrochée, toujours dans la fenêtre."""
-    x = window.right - offset[0]
-    y = window.bottom - offset[1]
-    x = max(window.x, min(x, window.right - canvas))
-    y = max(window.y, min(y, window.bottom - canvas))
+    line = SEAT_LINE if sitting else FEET_LINE
+    x = window.x + max(0, min(offset, window.width - canvas))
+    y = window.y - round(size * (PADDING + line))
     return x, y
+
+
+def near_edge(x: int, y: int, size: int, canvas: int, window: Rect, sitting: bool) -> bool:
+    """La mascotte (qu'on vient de déplacer) est encore sur le bord haut de la fenêtre."""
+    _, edge_y = on_edge(edge_offset(x, canvas, window), size, canvas, window, sitting)
+    center = x + canvas / 2
+    return window.x <= center <= window.right and abs(y - edge_y) <= canvas / 2
 
 
 def _state_file():

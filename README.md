@@ -47,10 +47,11 @@ Glisse la mascotte où tu veux : sa position est mémorisée (`~/.local/state/cu
 supprime ce fichier puis `custos restart` pour revenir au coin choisi dans la config).
 
 Clic droit sur la mascotte : **S'accrocher** à la fenêtre où tu étais (ou `custos attach`).
-Elle se pose dans son coin, la suit, se cache quand elle n'est pas sur l'espace de travail
-affiché, et chaque question inclut une capture de cette fenêtre, même si une autre a le
-focus. La glisser hors de la fenêtre (ou `custos detach`) la détache ; elle se détache aussi
-quand la fenêtre se ferme. Le menu permet aussi de la remettre dans le coin.
+Elle s'assoit sur le bord haut de la fenêtre, près du coin haut-gauche, et se lève quand
+elle réfléchit, parle ou s'inquiète. Elle suit la fenêtre, se cache quand elle n'est pas
+sur l'espace de travail affiché, et chaque question inclut une capture de cette fenêtre,
+même si une autre a le focus. Glisse-la le long du bord pour la déplacer ; éloigne-la du
+bord (ou `custos detach`) pour la détacher. Elle se détache aussi quand la fenêtre se ferme.
 
 Une icône dans la barre (caelestia) permet de la ranger : clic pour la cacher ou la faire
 réapparaître, clic droit pour lui poser une question. Aussi via le clic droit sur la mascotte

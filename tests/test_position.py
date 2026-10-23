@@ -58,33 +58,38 @@ def test_corrupt_state_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 WIN = position.Rect(1311, 806, 1228, 773)  # fenêtre foot en bas à droite
+SIZE = 96  # canvas = 115 avec la marge de flottement
 
 
-def test_attach_from_outside_goes_to_bottom_right_corner() -> None:
-    offset = position.attached_offset(100, 100, CANVAS, WIN)
-    x, y = position.attached_position(offset, CANVAS, WIN)
-    assert (x, y) == (WIN.right - CANVAS - position.ATTACH_MARGIN, WIN.bottom - CANVAS - position.ATTACH_MARGIN)
+def test_sits_on_top_edge() -> None:
+    x, y = position.on_edge(position.ATTACH_MARGIN, SIZE, CANVAS, WIN, sitting=True)
+    assert x == WIN.x + position.ATTACH_MARGIN
+    # la ligne d'assise du sprite tombe exactement sur le bord haut de la fenêtre
+    assert y + round(SIZE * (position.PADDING + position.SEAT_LINE)) == WIN.y
 
 
-def test_attach_from_inside_keeps_current_spot() -> None:
-    offset = position.attached_offset(1500, 900, CANVAS, WIN)
-    assert position.attached_position(offset, CANVAS, WIN) == (1500, 900)
+def test_stands_up_on_the_edge() -> None:
+    _, sitting_y = position.on_edge(0, SIZE, CANVAS, WIN, sitting=True)
+    _, standing_y = position.on_edge(0, SIZE, CANVAS, WIN, sitting=False)
+    assert standing_y < sitting_y  # debout, elle monte : ses pieds se posent sur le bord
+    assert standing_y + round(SIZE * (position.PADDING + position.FEET_LINE)) == WIN.y
 
 
-def test_follows_window_move_and_resize() -> None:
-    offset = position.attached_offset(1500, 900, CANVAS, WIN)
+def test_edge_offset_follows_window_and_stays_inside() -> None:
+    offset = position.edge_offset(1500, CANVAS, WIN)
+    assert offset == 1500 - WIN.x
     moved = position.Rect(200, 100, 1228, 773)
-    assert position.attached_position(offset, CANVAS, moved) == (1500 - 1111, 900 - 706)
-    # La fenêtre rétrécit un peu : même distance du coin bas-droit…
-    smaller = position.Rect(1311, 806, 1100, 773)
-    assert position.attached_position(offset, CANVAS, smaller) == (1500 - 128, 900)
-    # …beaucoup : ramenée contre le bord gauche plutôt que de sortir de la fenêtre.
-    narrow = position.Rect(1311, 806, 600, 773)
-    assert position.attached_position(offset, CANVAS, narrow) == (1311, 900)
-    # …mais jamais en dehors de la fenêtre.
-    tiny = position.Rect(1311, 806, 150, 150)
-    x, y = position.attached_position(offset, CANVAS, tiny)
-    assert tiny.x <= x <= tiny.right - CANVAS and tiny.y <= y <= tiny.bottom - CANVAS
+    assert position.on_edge(offset, SIZE, CANVAS, moved, True)[0] == 200 + offset
+    narrow = position.Rect(1311, 806, 150, 773)  # fenêtre rétrécie : reste au-dessus d'elle
+    x, _ = position.on_edge(offset, SIZE, CANVAS, narrow, True)
+    assert narrow.x <= x <= narrow.right
+
+
+def test_near_edge() -> None:
+    x, y = position.on_edge(200, SIZE, CANVAS, WIN, sitting=True)
+    assert position.near_edge(x + 300, y + 10, SIZE, CANVAS, WIN, True)  # glissée le long du bord
+    assert not position.near_edge(x, y + 400, SIZE, CANVAS, WIN, True)  # descendue dans la fenêtre
+    assert not position.near_edge(100, y, SIZE, CANVAS, WIN, True)  # sortie par la gauche
 
 
 def test_inside_uses_mascot_center() -> None:

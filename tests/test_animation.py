@@ -8,6 +8,8 @@ from custos.ui.animation import (
     FPS,
     POP_AMPLITUDE,
     POP_DURATION,
+    SITTING_BLINK_SPRITE,
+    SITTING_SPRITES,
     SPRITES,
     TIMEOUTS,
     Animator,
@@ -89,3 +91,21 @@ def test_frame_rate_follows_state() -> None:
     animator.frame(61)  # endormie
     assert animator.fps(70) == FPS[MascotState.SLEEPING]
     assert FPS[MascotState.SLEEPING] < FPS[MascotState.IDLE] < FAST_FPS
+
+
+def test_sitting_sprites_when_attached() -> None:
+    animator = make(sleep_after=60)
+    animator.sitting = True
+    assert animator.frame(1.0).sprite == SITTING_SPRITES[MascotState.IDLE]
+    assert animator.frame(1.0).dy == 0.0  # assise : elle ne flotte pas
+    blink = animator.next_blink
+    assert animator.frame(blink + BLINK_DURATION / 2).sprite == SITTING_BLINK_SPRITE
+    assert animator.frame(61).sprite == SITTING_SPRITES[MascotState.SLEEPING]
+
+
+def test_stands_up_to_talk_when_attached() -> None:
+    animator = make()
+    animator.sitting = True
+    animator.set_state(MascotState.THINKING, 0.0)
+    assert not animator.is_sitting
+    assert animator.frame(1.0).sprite == SPRITES[MascotState.THINKING]

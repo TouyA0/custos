@@ -28,14 +28,14 @@ from custos.config import MascotConfig
 from custos.context import hyprland
 from custos.states import MascotState
 from custos.ui import position
-from custos.ui.animation import BLINK_SPRITE, SPRITES, Animator
+from custos.ui.animation import ALL_SPRITES, Animator
 from custos.ui.bubble import CSS as BUBBLE_CSS
 from custos.ui.bubble import WIDTH as BUBBLE_WIDTH
 from custos.ui.bubble import Bubble
+from custos.ui.position import PADDING
 from custos.ui.tray import Tray
 
 APP_ID = "io.github.touya0.Custos"
-PADDING = 0.1  # marge autour du sprite (fraction de la taille) pour le flottement et le rebond
 HALO_COLOR = (245, 245, 250)
 HALO_OPACITY = 0.9
 
@@ -93,7 +93,7 @@ def _halo(pixbuf: GdkPixbuf.Pixbuf, radius: int) -> Gdk.Texture:
 def load_sprites(folder: Path, pixels: int, outline: bool) -> dict[str, tuple[Gdk.Texture, Gdk.Texture | None]]:
     """Charge chaque sprite à la taille d'affichage, avec son halo éventuel."""
     sprites = {}
-    for name in [*SPRITES.values(), BLINK_SPRITE]:
+    for name in ALL_SPRITES:
         pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(folder / f"{name}.png"), pixels, pixels, True)
         if not pixbuf.get_has_alpha():
             pixbuf = pixbuf.add_alpha(False, 0, 0, 0)
@@ -248,6 +248,8 @@ class MascotOverlay:
 
     def set_state(self, state: MascotState) -> None:
         self.animator.set_state(state, time.monotonic())
+        if self.attached:
+            self._follow()  # assise ↔ debout : elle se replace aussitôt sur le bord
 
     def move_to(self, x: int, y: int) -> None:
         self.x, self.y = position.clamp(x, y, self.canvas, *self.screen)
@@ -283,13 +285,14 @@ class MascotOverlay:
             return
         if self.attached:
             window = hyprland.find_window(self.attached)
-            if window and position.inside(self.x, self.y, self.canvas, self._rect(window)):
-                # Déplacée dans la fenêtre : elle garde ce nouvel emplacement.
-                self._attach_offset = position.attached_offset(
-                    self.x, self.y, self.canvas, self._rect(window)
-                )
+            if window and position.near_edge(
+                self.x, self.y, self.config.size, self.canvas, self._rect(window), self.animator.is_sitting
+            ):
+                # Glissée le long du bord : elle s'y repose à ce nouvel endroit.
+                self._attach_offset = position.edge_offset(self.x, self.canvas, self._rect(window))
+                self._follow()
                 return
-            self.detach(move_back=False)  # glissée hors de la fenêtre : on la détache
+            self.detach(move_back=False)  # éloignée du bord : on la détache
         position.save(self.x, self.y)
 
     def _on_click(self, *_args) -> None:
@@ -332,8 +335,16 @@ class MascotOverlay:
         )
 
     def attach(self, window: hyprland.ActiveWindow) -> None:
+        """S'assoit sur le bord haut de la fenêtre : au-dessus de l'endroit où elle est si
+        elle est déjà sur la fenêtre, sinon près du coin haut-gauche."""
+        rect = self._rect(window)
         self.attached = window.address
-        self._attach_offset = position.attached_offset(self.x, self.y, self.canvas, self._rect(window))
+        self.animator.sitting = True
+        self._attach_offset = (
+            position.edge_offset(self.x, self.canvas, rect)
+            if position.inside(self.x, self.y, self.canvas, rect)
+            else position.ATTACH_MARGIN
+        )
         if not self._follow_timer:
             self._follow_timer = GLib.timeout_add(FOLLOW_INTERVAL, self._follow)
         self._follow()
@@ -344,6 +355,7 @@ class MascotOverlay:
         if not self.attached:
             return
         self.attached = None
+        self.animator.sitting = False
         if self._follow_timer:
             GLib.source_remove(self._follow_timer)
             self._follow_timer = 0
@@ -369,7 +381,9 @@ class MascotOverlay:
             self._hidden_offscreen = offscreen
             self._update_visibility()
         if not offscreen:
-            x, y = position.attached_position(self._attach_offset, self.canvas, self._rect(window))
+            x, y = position.on_edge(
+                self._attach_offset, self.config.size, self.canvas, self._rect(window), self.animator.is_sitting
+            )
             if (x, y) != (self.x, self.y):
                 self.move_to(x, y)
         return GLib.SOURCE_CONTINUE

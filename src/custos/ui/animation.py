@@ -53,6 +53,15 @@ SPRITES = {
 }
 BLINK_SPRITE = "idle/1"
 
+# Accrochée à une fenêtre, elle est assise sur son bord au repos et quand elle dort ;
+# pour réfléchir, parler ou s'inquiéter, elle se lève (sprites debout).
+SITTING_SPRITES = {
+    MascotState.IDLE: "sitting/0",
+    MascotState.SLEEPING: "sitting-sleeping/0",
+}
+SITTING_BLINK_SPRITE = "sitting/1"
+ALL_SPRITES = [*SPRITES.values(), BLINK_SPRITE, *SITTING_SPRITES.values(), SITTING_BLINK_SPRITE]
+
 
 @dataclass(frozen=True)
 class Frame:
@@ -69,6 +78,11 @@ class Animator:
         self.state = MascotState.IDLE
         self.since = now
         self.next_blink = now + self._blink_delay()
+        self.sitting = False  # accrochée à une fenêtre : assise sur son bord quand elle le peut
+
+    @property
+    def is_sitting(self) -> bool:
+        return self.sitting and self.state in SITTING_SPRITES
 
     def _blink_delay(self) -> float:
         return self.rng.uniform(*BLINK_INTERVAL)
@@ -96,15 +110,16 @@ class Animator:
         self._update(now)
         elapsed = now - self.since
 
-        sprite = SPRITES[self.state]
+        sitting = self.is_sitting
+        sprite = SITTING_SPRITES[self.state] if sitting else SPRITES[self.state]
         if self.state is MascotState.IDLE and now >= self.next_blink:
             if now < self.next_blink + BLINK_DURATION:
-                sprite = BLINK_SPRITE
+                sprite = SITTING_BLINK_SPRITE if sitting else BLINK_SPRITE
             else:
                 self.next_blink = now + self._blink_delay()
 
         amplitude, period = FLOAT[self.state]
-        dy = amplitude * math.sin(2 * math.pi * now / period)
+        dy = 0.0 if sitting else amplitude * math.sin(2 * math.pi * now / period)
 
         dx = 0.0
         if self.state is MascotState.WORRIED and elapsed < SHAKE_DURATION:
