@@ -6,7 +6,7 @@ Hyprland ou le hook shell) lui envoient simplement un message via le socket.
 
 import argparse
 
-from custos import __version__
+from custos import __version__, ipc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,8 +38,6 @@ def main(argv: list[str] | None = None) -> int:
 
             return run()
 
-        from custos import ipc
-
         if args.subcommand == "ask":
             ipc.send(
                 {
@@ -50,14 +48,25 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
         elif args.subcommand == "shell-event":
-            ipc.send(
-                {
-                    "type": "shell-event",
-                    "exit_code": args.exit_code,
-                    "command": args.command,
-                    "cwd": args.cwd,
-                }
-            )
+            try:
+                ipc.send(
+                    {
+                        "type": "shell-event",
+                        "exit_code": args.exit_code,
+                        "command": args.command,
+                        "cwd": args.cwd,
+                    }
+                )
+            except ipc.DaemonNotRunning:
+                pass  # appelé après chaque commande : silencieux si Custos ne tourne pas
+    except ipc.DaemonNotRunning:
+        # `custos ask` vient souvent d'un raccourci, sans terminal : on prévient aussi à l'écran.
+        from custos.ui.notify import notify
+
+        message = "Custos ne tourne pas : lance `custos daemon`."
+        print(f"custos: {message}")
+        notify("Custos", message)
+        return 1
     except NotImplementedError as exc:
         print(f"custos: pas encore implémenté ({exc})")
         return 1
