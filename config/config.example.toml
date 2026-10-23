@@ -1,0 +1,20 @@
+# Copier dans ~/.config/custos/config.toml et adapter.
+
+[claude]
+# Appelé via `claude -p` : utilise ton abonnement, pas de clé API.
+model = "claude-opus-5-5"
+timeout = 120  # secondes
+
+[mascot]
+# top-left | top-right | bottom-left | bottom-right
+position = "bottom-right"
+margin = 24  # pixels depuis le bord de l'écran
+size = 96    # taille du sprite en pixels
+
+[privacy]
+# Classes Hyprland (`hyprctl activewindow -j`) dont Custos ne lit jamais le contenu.
+blocked_classes = ["org.keepassxc.KeePassXC", "Bitwarden"]
+
+[shell]
+# La mascotte réagit (localement, sans appeler Claude) quand une commande échoue.
+react_on_failure = true

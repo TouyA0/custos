@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environnements
+.venv/
+venv/
+
+# Outils
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
+
+# Config locale (la vraie vit dans ~/.config/custos/)
+config.toml
+!config/config.example.toml
