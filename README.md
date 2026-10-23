@@ -11,6 +11,9 @@ Mascotte gardienne pour Hyprland, propulsée par Claude : elle veille sur ton é
 - Claude est appelé via `claude -p` : ça utilise ton abonnement Claude, pas de clé API.
 - Claude n'est appelé que quand **tu** le demandes. Les réactions automatiques
   (une commande qui échoue, par exemple) restent locales.
+- Certaines fenêtres ne sont jamais lues : une appli entière (`blocked_classes`, ton
+  gestionnaire de mots de passe) ou une page précise d'après son titre (`blocked_titles`,
+  ta banque ou la navigation privée dans le navigateur).
 
 ## Prérequis (Arch Linux)
 

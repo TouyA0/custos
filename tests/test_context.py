@@ -53,6 +53,13 @@ def test_blocked_window_reads_nothing(fake_desktop: list[str]) -> None:
     assert fake_desktop == []
 
 
+def test_window_blocked_by_title_reads_nothing(fake_desktop: list[str]) -> None:
+    ctx = context.collect(PrivacyConfig(blocked_titles=["~/CODE*"]), selection=True, screenshot=True)
+    assert ctx.blocked
+    assert ctx.selection == ""
+    assert fake_desktop == []
+
+
 def test_prompt_with_selection_and_default_question() -> None:
     prompt = build_prompt(None, Context(window=WINDOW, selection="ls -la"))
     assert "Fenêtre active : foot — « ~/code »" in prompt

@@ -1,5 +1,6 @@
 import pytest
 
+from custos.config import PrivacyConfig
 from custos.context.privacy import MASK, is_blocked, redact_secrets
 
 
@@ -64,6 +65,20 @@ def test_ordinary_text_is_untouched(text: str) -> None:
     assert redact_secrets(text) == text
 
 
-def test_is_blocked() -> None:
-    assert is_blocked("Bitwarden", ["Bitwarden"])
-    assert not is_blocked("foot", ["Bitwarden"])
+def test_is_blocked_by_class() -> None:
+    config = PrivacyConfig(blocked_classes=["Bitwarden"])
+    assert is_blocked("Bitwarden", "Coffre", config)
+    assert not is_blocked("foot", "fish", config)
+
+
+def test_is_blocked_by_title() -> None:
+    config = PrivacyConfig(blocked_titles=["*crédit agricole*", "*Navigation privée*"])
+    assert is_blocked("brave-browser", "Mes comptes - Crédit Agricole - Brave", config)
+    assert is_blocked("firefox", "Nouvel onglet — Navigation privée", config)
+    assert not is_blocked("brave-browser", "Python docs - Brave", config)
+
+
+def test_title_pattern_without_wildcard_matches_whole_title() -> None:
+    config = PrivacyConfig(blocked_titles=["Banque"])
+    assert is_blocked("brave-browser", "banque", config)
+    assert not is_blocked("brave-browser", "Ma Banque - Brave", config)

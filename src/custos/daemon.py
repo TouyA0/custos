@@ -190,7 +190,7 @@ class Daemon:
             return  # bulle ouverte : on ne dérange pas (et sa propre sélection ne compte pas)
         if kind != watch.SCREENSHOT:
             window = hyprland.active_window()
-            if window and privacy.is_blocked(window.window_class, self.config.privacy.blocked_classes):
+            if window and privacy.is_blocked(window.window_class, window.title, self.config.privacy):
                 return
         if kind == watch.SELECTION:
             text = clipboard.selection().strip()
@@ -216,7 +216,7 @@ class Daemon:
 
     def set_attached(self, window: hyprland.ActiveWindow | None) -> None:
         """Appelé par l'overlay quand la mascotte s'accroche ou se détache."""
-        if window and privacy.is_blocked(window.window_class, self.config.privacy.blocked_classes):
+        if window and privacy.is_blocked(window.window_class, window.title, self.config.privacy):
             self.ui.detach()
             self.ui.show_error("Cette fenêtre est protégée : je ne m'y accroche pas.")
             return

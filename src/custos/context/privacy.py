@@ -1,6 +1,9 @@
 """Filtrage avant envoi : fenêtres bloquées et secrets (clés, tokens)."""
 
 import re
+from fnmatch import fnmatchcase
+
+from custos.config import PrivacyConfig
 
 MASK = "[secret masqué]"
 
@@ -31,8 +34,16 @@ ASSIGNMENT = re.compile(rf"(?i)\b({_NAME})(\s*[:=]\s*)" + _VALUE)
 CLI_FLAG = re.compile(rf"(?i)(?<!\S)(--?{_NAME})(\s+)" + _VALUE)
 
 
-def is_blocked(window_class: str, blocked_classes: list[str]) -> bool:
-    return window_class in blocked_classes
+def is_blocked(window_class: str, title: str, config: PrivacyConfig) -> bool:
+    """Fenêtre dont Custos ne lit rien : appli entière (classe) ou page précise (titre).
+
+    Les motifs de titre sont des jokers (`*Banque*`), sans tenir compte de la casse :
+    utile pour le navigateur, où toutes les fenêtres ont la même classe.
+    """
+    if window_class in config.blocked_classes:
+        return True
+    title = title.casefold()
+    return any(fnmatchcase(title, pattern.casefold()) for pattern in config.blocked_titles)
 
 
 def redact_secrets(text: str) -> str:

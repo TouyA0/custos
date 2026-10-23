@@ -34,6 +34,7 @@ class MascotConfig:
 @dataclass
 class PrivacyConfig:
     blocked_classes: list[str] = field(default_factory=list)
+    blocked_titles: list[str] = field(default_factory=list)  # motifs à jokers : "*Banque*"
 
 
 @dataclass

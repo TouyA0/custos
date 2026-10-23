@@ -21,6 +21,9 @@ tray = true  # icône dans la barre : clic pour la ranger ou l'afficher, clic dr
 [privacy]
 # Classes Hyprland (`hyprctl activewindow -j`) dont Custos ne lit jamais le contenu.
 blocked_classes = ["org.keepassxc.KeePassXC", "Bitwarden"]
+# Titres de fenêtre (jokers *, sans tenir compte de la casse) : bloque une page précise
+# sans bloquer toute l'appli, par exemple ta banque ou la navigation privée dans le navigateur.
+blocked_titles = ["*privé*", "*private*", "*mot de passe*", "*password*"]
 
 [shell]
 # La mascotte réagit (localement, sans appeler Claude) quand une commande échoue.

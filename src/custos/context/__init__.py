@@ -52,7 +52,7 @@ def collect(
     `window` : fenêtre à lire (celle où la mascotte est accrochée) au lieu de la fenêtre active.
     """
     window = window or hyprland.active_window()
-    if window and privacy.is_blocked(window.window_class, config.blocked_classes):
+    if window and privacy.is_blocked(window.window_class, window.title, config):
         return Context(window=window, blocked=True)
 
     context = Context(window=window, failure=failure, attached=attached)
