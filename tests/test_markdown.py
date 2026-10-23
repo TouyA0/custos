@@ -1,7 +1,7 @@
 import gi
 import pytest
 
-from custos.ui.markdown import code_blocks, to_pango
+from custos.ui.markdown import blocks, to_pango
 
 ANSWER = "Utilise **df** :\n\n```bash\ndf -h\n```\n\n- `-h` : tailles lisibles\n- `/` : racine"
 
@@ -35,10 +35,18 @@ def test_code_block_with_only_one_line_keeps_its_content() -> None:
     assert ">ls</span>" in to_pango("```ls```")
 
 
-def test_code_blocks_only_returns_closed_blocks() -> None:
-    assert code_blocks(ANSWER) == ["df -h"]
-    assert code_blocks("```bash\nls\n```\npuis\n```\nrm -i x\n```") == ["ls", "rm -i x"]
-    assert code_blocks("```bash\npas fini") == []
+def test_blocks_split_text_and_code() -> None:
+    assert blocks(ANSWER) == [
+        ("text", "Utilise **df** :"),
+        ("code", "df -h"),
+        ("text", "- `-h` : tailles lisibles\n- `/` : racine"),
+    ]
+
+
+def test_blocks_while_streaming_and_without_code() -> None:
+    assert blocks("Voici :\n```bash\nsudo pac") == [("text", "Voici :"), ("code", "sudo pac")]
+    assert blocks("Juste du texte.") == [("text", "Juste du texte.")]
+    assert blocks("") == []
 
 
 def test_markup_is_valid_pango() -> None:

@@ -7,12 +7,12 @@ automatiques de la mascotte restent locales.
 import base64
 import json
 import subprocess
-import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from custos.config import ClaudeConfig
+from custos.supervisor import state_dir
 
 SYSTEM_PROMPT = """\
 Tu es Custos, une petite mascotte gardienne qui vit sur le bureau Linux \
@@ -28,10 +28,22 @@ class ClaudeError(Exception):
     pass
 
 
-def build_command(config: ClaudeConfig, system_prompt: str = SYSTEM_PROMPT) -> list[str]:
-    # Aucun outil, aucune session enregistrée, aucun réglage ni serveur MCP :
-    # Custos n'utilise Claude que pour répondre, jamais pour agir.
-    return [
+def conversations_dir() -> Path:
+    """Dossier de travail des conversations de Custos.
+
+    Claude Code range ses sessions par dossier : elles sont ainsi toutes ensemble,
+    à part de tes projets, et `claude --resume` lancé ici ne liste qu'elles.
+    """
+    return state_dir() / "conversations"
+
+
+def build_command(
+    config: ClaudeConfig, system_prompt: str = SYSTEM_PROMPT, resume: str | None = None
+) -> list[str]:
+    # Aucun outil, aucun réglage ni serveur MCP : dans la bulle, Custos n'utilise
+    # Claude que pour répondre, jamais pour agir. La session est enregistrée pour les
+    # questions de suivi (--resume) et pour l'ouvrir en grand dans un terminal.
+    command = [
         "claude", "-p",
         "--model", config.model,
         "--input-format", "stream-json",
@@ -39,11 +51,13 @@ def build_command(config: ClaudeConfig, system_prompt: str = SYSTEM_PROMPT) -> l
         "--verbose",
         "--include-partial-messages",
         "--tools", "",
-        "--no-session-persistence",
         "--setting-sources", "",
         "--strict-mcp-config",
         "--system-prompt", system_prompt,
     ]
+    if resume:
+        command += ["--resume", resume]
+    return command
 
 
 def build_message(prompt: str, images: list[Path] | None = None) -> dict:
@@ -79,23 +93,42 @@ def parse_line(line: str) -> str | None:
     return None
 
 
+def parse_session(line: str) -> str | None:
+    """Identifiant de session annoncé au début de la sortie de `claude -p`."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if event.get("type") == "system" and event.get("subtype") == "init":
+        return event.get("session_id")
+    return None
+
+
 def ask(
     prompt: str,
     config: ClaudeConfig,
     images: list[Path] | None = None,
     system_prompt: str = SYSTEM_PROMPT,
+    resume: str | None = None,
+    on_session: Callable[[str], None] | None = None,
 ) -> Iterator[str]:
-    """Envoie `prompt` à Claude et renvoie la réponse morceau par morceau."""
+    """Envoie `prompt` à Claude et renvoie la réponse morceau par morceau.
+
+    `resume` : session à poursuivre (question de suivi). `on_session` reçoit
+    l'identifiant de la session, pour la poursuivre ou l'ouvrir en grand ensuite.
+    """
     message = build_message(prompt, images)
+    workdir = conversations_dir()
+    workdir.mkdir(parents=True, exist_ok=True)
     try:
         process = subprocess.Popen(
-            build_command(config, system_prompt),
+            build_command(config, system_prompt, resume),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            # Dossier neutre : pas de CLAUDE.md de projet chargé par erreur.
-            cwd=tempfile.gettempdir(),
+            # Dossier à part : pas de CLAUDE.md de projet chargé par erreur.
+            cwd=workdir,
         )
     except FileNotFoundError as exc:
         raise ClaudeError("la commande `claude` est introuvable") from exc
@@ -107,6 +140,9 @@ def ask(
         process.stdin.write(json.dumps(message) + "\n")
         process.stdin.close()
         for line in process.stdout:
+            session = parse_session(line)
+            if session and on_session:
+                on_session(session)
             text = parse_line(line)
             if text:
                 received = True

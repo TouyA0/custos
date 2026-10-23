@@ -111,15 +111,8 @@ def default_question(context: Context) -> str | None:
     return None
 
 
-def build_prompt(
-    question: str | None,
-    context: Context,
-    history: list[tuple[str, str]] | None = None,
-) -> str:
+def build_prompt(question: str | None, context: Context) -> str:
     parts = []
-    if history:
-        exchanges = "\n\n".join(f"Moi : {q}\n\nToi : {a}" for q, a in history)
-        parts.append(f"Notre conversation jusqu'ici :\n\n{exchanges}")
     if context.window and not context.blocked:
         title = privacy.redact_secrets(context.window.title)
         parts.append(f"Fenêtre active : {context.window.window_class} — « {title} »")

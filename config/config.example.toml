@@ -4,6 +4,8 @@
 # Appelé via `claude -p` : utilise ton abonnement, pas de clé API.
 model = "claude-opus-5-5"
 timeout = 120  # secondes
+# Bouton ↗ de la bulle : ouvre la conversation en grand (Claude Code dans un terminal).
+open_command = "foot --working-directory={cwd} claude --resume {session} --model {model}"
 
 [mascot]
 # top-left | top-right | bottom-left | bottom-right

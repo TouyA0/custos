@@ -2,12 +2,14 @@
 
 import logging
 import os
+import shlex
 import shutil
 import signal
+import subprocess
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -54,7 +56,7 @@ class Session:
     """Ce que Custos a lu au moment du raccourci, et la conversation qui a suivi."""
 
     context: Context
-    history: list[tuple[str, str]] = field(default_factory=list)
+    claude_session: str | None = None  # session Claude Code, reprise pour les questions de suivi
 
 
 class Daemon:
@@ -82,6 +84,8 @@ class Daemon:
                 self.ui.detach()
             case "toggle":
                 self.ui.toggle_stowed()
+            case "open":
+                self.open_full()
             case other:
                 log.warning("type de message inconnu : %s", other)
 
@@ -228,25 +232,32 @@ class Daemon:
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
             return
         try:
-            prompt = context.build_prompt(question, ctx, session.history)
-            images = [ctx.screenshot] if ctx.screenshot else None
+            # Première question : avec le contexte (fenêtre, sélection, capture). Les suivantes
+            # reprennent la session Claude, qui a déjà tout ça : juste la question.
+            resume = session.claude_session
+            prompt = question if resume else context.build_prompt(question, ctx)
+            images = [ctx.screenshot] if ctx.screenshot and not resume else None
             log.info(
-                "question (sélection : %d car., capture : %s, échanges précédents : %d)",
+                "question (sélection : %d car., capture : %s, suivi : %s)",
                 len(ctx.selection),
                 "oui" if images else "non",
-                len(session.history),
+                "oui" if resume else "non",
             )
             self.ui.set_state(MascotState.THINKING)
             self.ui.start_answer(question)
             started = time.monotonic()
             chunks = []
-            for chunk in claude.ask(prompt, self.config.claude, images=images):
+            def remember(session_id: str) -> None:
+                session.claude_session = session_id
+
+            for chunk in claude.ask(
+                prompt, self.config.claude, images=images, resume=resume, on_session=remember
+            ):
                 chunks.append(chunk)
                 self.ui.append_answer(chunk)
             answer = "".join(chunks).strip()
             log.info("réponse en %.1f s (%d car.)", time.monotonic() - started, len(answer))
 
-            session.history.append((question, answer))
             ctx.cleanup()  # la capture n'est envoyée qu'avec la première question
             self.ui.end_answer(answer)
             self.ui.set_state(MascotState.TALKING)
@@ -256,6 +267,31 @@ class Daemon:
             self.ui.show_error(str(exc))
         finally:
             self._busy.release()
+
+    def open_full(self) -> None:
+        """Ouvre la conversation en cours en grand : Claude Code dans un terminal."""
+        session_id = self.session.claude_session if self.session else None
+        if not session_id:
+            self.ui.show_error("Pose d'abord une question.")
+            return
+        command = self.config.claude.open_command.format(
+            session=session_id,
+            cwd=shlex.quote(str(claude.conversations_dir())),
+            model=self.config.claude.model,
+        )
+        try:
+            subprocess.Popen(
+                shlex.split(command),
+                cwd=claude.conversations_dir(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            self.ui.show_error(f"Impossible d'ouvrir le terminal : {exc}")
+            return
+        log.info("conversation ouverte en grand")
 
     def shell_event(self, message: dict) -> None:
         # Réaction locale uniquement : Claude n'est pas appelé ici.

@@ -43,3 +43,19 @@ def test_parse_error_result_raises() -> None:
     line = json.dumps({"type": "result", "is_error": True, "result": "Not logged in"})
     with pytest.raises(claude.ClaudeError, match="Not logged in"):
         claude.parse_line(line)
+
+
+def test_session_is_saved_and_can_be_resumed() -> None:
+    config = ClaudeConfig()
+    assert "--no-session-persistence" not in claude.build_command(config)
+    assert "--resume" not in claude.build_command(config)
+    cmd = claude.build_command(config, resume="abc-123")
+    assert cmd[cmd.index("--resume") + 1] == "abc-123"
+    assert cmd[cmd.index("--tools") + 1] == ""  # toujours aucun outil dans la bulle
+
+
+def test_parse_session() -> None:
+    init = json.dumps({"type": "system", "subtype": "init", "session_id": "abc-123"})
+    assert claude.parse_session(init) == "abc-123"
+    assert claude.parse_session(json.dumps({"type": "system", "subtype": "status"})) is None
+    assert claude.parse_session("pas du json") is None

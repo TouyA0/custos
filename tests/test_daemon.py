@@ -69,8 +69,10 @@ def prompts(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list | None]]:
     """Remplace Claude : renvoie toujours « Bonjour ! » et note les prompts reçus."""
     sent: list[tuple[str, list | None]] = []
 
-    def fake_ask(prompt, config, images=None):
+    def fake_ask(prompt, config, images=None, resume=None, on_session=None):
         sent.append((prompt, images))
+        if on_session:
+            on_session("session-1")
         yield "Bon"
         yield "jour ! "
 
@@ -117,14 +119,22 @@ def test_empty_question_without_context_is_refused(monkeypatch, ui, prompts) -> 
     assert ui.errors == ["Écris ta question."]
 
 
-def test_follow_up_includes_conversation(monkeypatch, ui, prompts) -> None:
+def test_follow_up_resumes_claude_session(monkeypatch, ui) -> None:
+    calls = []
+
+    def fake_ask(prompt, config, images=None, resume=None, on_session=None):
+        calls.append((prompt, resume))
+        on_session("session-1")
+        yield "ok"
+
+    monkeypatch.setattr(claude, "ask", fake_ask)
     use_context(monkeypatch, Context(window=WINDOW))
     d = daemon.Daemon(Config(), ui)
     d.handle({"type": "ask"})
     d.answer("première ?")
     d.answer("et ensuite ?")
-    assert "Moi : première ?\n\nToi : Bonjour !" in prompts[1][0]
-    assert prompts[1][0].endswith("Question : et ensuite ?")
+    assert calls[0][1] is None and "Fenêtre active" in calls[0][0]  # contexte à la 1re
+    assert calls[1] == ("et ensuite ?", "session-1")  # puis juste la question, en reprise
 
 
 def test_new_shortcut_starts_new_conversation(monkeypatch, ui, prompts) -> None:
@@ -133,7 +143,7 @@ def test_new_shortcut_starts_new_conversation(monkeypatch, ui, prompts) -> None:
     d.handle({"type": "ask", "question": "un"})
     use_context(monkeypatch, Context(window=WINDOW))
     d.handle({"type": "ask", "question": "deux"})
-    assert "Moi :" not in prompts[1][0]
+    assert "Fenêtre active" in prompts[1][0]  # nouvelle session : le contexte est renvoyé
 
 
 def test_screenshot_sent_once_then_deleted(monkeypatch, ui, prompts, tmp_path) -> None:
@@ -496,6 +506,28 @@ def test_detach(ui) -> None:
 def test_toggle_command(ui) -> None:
     daemon.Daemon(Config(), ui).handle({"type": "toggle"})
     assert ui.toggles == 1
+
+
+def test_open_full_launches_claude_in_terminal(monkeypatch, ui, prompts, tmp_path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    launched = []
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda cmd, **kw: launched.append((cmd, kw)))
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "question": "salut ?"})
+    d.open_full()
+    cmd, options = launched[0]
+    conversations = str(tmp_path / "custos" / "conversations")
+    assert cmd == [
+        "foot", f"--working-directory={conversations}",
+        "claude", "--resume", "session-1", "--model", "claude-opus-5-5",
+    ]
+    assert options["start_new_session"] is True
+
+
+def test_open_full_without_conversation(ui) -> None:
+    daemon.Daemon(Config(), ui).open_full()
+    assert ui.errors == ["Pose d'abord une question."]
 
 
 def test_successful_command_is_ignored(ui) -> None:

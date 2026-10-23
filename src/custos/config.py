@@ -15,6 +15,8 @@ def config_path() -> Path:
 class ClaudeConfig:
     model: str = "claude-opus-5-5"
     timeout: int = 120
+    # Ouvrir la conversation en grand (bouton ↗ de la bulle) : {session}, {cwd}, {model}
+    open_command: str = "foot --working-directory={cwd} claude --resume {session} --model {model}"
 
 
 @dataclass

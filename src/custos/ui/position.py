@@ -15,7 +15,7 @@ ATTACH_MARGIN = 12  # écart avec le coin haut-gauche de la fenêtre quand on vi
 # Hauteurs dans les sprites (fraction de leur taille), mesurées sur les images actuelles :
 SEAT_LINE = 0.76  # sitting/0 : bas du corps, d'où pendent les jambes
 FEET_LINE = 0.96  # sprites debout : dessous des pieds
-BUBBLE_GAP = 4  # écart entre la mascotte et la bulle
+BUBBLE_GAP = 6  # écart entre la mascotte et la bulle
 SCREEN_MARGIN = 8  # la bulle ne colle jamais au bord de l'écran
 
 
