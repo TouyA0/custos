@@ -21,6 +21,7 @@ class FakeUI:
         self.answers: list[str] = []
         self.errors: list[str] = []
         self.notices: list[str | None] = []
+        self.hidden: list[bool] = []
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
@@ -42,6 +43,9 @@ class FakeUI:
 
     def show_notice(self, kind: str | None) -> None:
         self.notices.append(kind)
+
+    def set_hidden(self, hidden: bool) -> None:
+        self.hidden.append(hidden)
 
 
 @pytest.fixture
@@ -379,6 +383,35 @@ def test_failure_has_priority_over_notice(ui, collected, desktop) -> None:
     d.handle(FAILURE)
     d.open_from_mascot()
     assert collected[0]["failure"] == FAILURE
+
+
+def test_fullscreen_hides_and_shows_mascot(monkeypatch, ui) -> None:
+    fullscreen = {"on": False}
+    monkeypatch.setattr(daemon.hyprland, "active_is_fullscreen", lambda: fullscreen["on"])
+    d = daemon.Daemon(Config(), ui)
+    d.on_hyprland_event("activewindowv2", "abc")
+    assert ui.hidden == []  # rien n'a changé
+    fullscreen["on"] = True
+    d.on_hyprland_event("fullscreen", "1")
+    d.on_hyprland_event("activewindowv2", "abc")  # toujours en plein écran : pas de doublon
+    fullscreen["on"] = False
+    d.on_hyprland_event("workspacev2", "2,2")
+    assert ui.hidden == [True, False]
+
+
+def test_irrelevant_events_do_not_query_hyprland(monkeypatch, ui) -> None:
+    calls = []
+    monkeypatch.setattr(daemon.hyprland, "active_is_fullscreen", lambda: calls.append(1) or True)
+    daemon.Daemon(Config(), ui).on_hyprland_event("openlayer", "custos")
+    assert calls == []
+
+
+def test_fullscreen_hiding_can_be_disabled(monkeypatch, ui) -> None:
+    monkeypatch.setattr(daemon.hyprland, "active_is_fullscreen", lambda: True)
+    config = Config()
+    config.mascot.hide_in_fullscreen = False
+    daemon.Daemon(config, ui).on_hyprland_event("fullscreen", "1")
+    assert ui.hidden == []
 
 
 def test_successful_command_is_ignored(ui) -> None:

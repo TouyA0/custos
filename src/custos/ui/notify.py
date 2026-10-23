@@ -63,3 +63,6 @@ class NotifyUI:
 
     def show_notice(self, kind: str | None) -> None:
         pass  # pas de mascotte, pas de badge
+
+    def set_hidden(self, hidden: bool) -> None:
+        pass

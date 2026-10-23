@@ -7,16 +7,21 @@ la souris pendant qu'on déplace la mascotte.
 import json
 import os
 import socket
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+FULLSCREEN = 2  # valeur du champ `fullscreen` d'une fenêtre (1 = simplement maximisée)
 
-def socket_path() -> Path | None:
+
+def socket_path(name: str = ".socket.sock") -> Path | None:
+    """Socket de commandes (.socket.sock) ou d'événements (.socket2.sock) de Hyprland."""
     signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not signature or not runtime:
         return None
-    return Path(runtime) / "hypr" / signature / ".socket.sock"
+    return Path(runtime) / "hypr" / signature / name
 
 
 def request(command: str) -> dict | list | None:
@@ -92,3 +97,37 @@ def parse(data: dict) -> ActiveWindow | None:
 def active_window() -> ActiveWindow | None:
     data = request("activewindow")
     return parse(data) if isinstance(data, dict) else None
+
+
+def is_fullscreen(window: dict | None) -> bool:
+    """La fenêtre est en vrai plein écran (vidéo, jeu…), pas seulement maximisée."""
+    if not window:
+        return False
+    return int(window.get("fullscreen", 0)) >= FULLSCREEN
+
+
+def active_is_fullscreen() -> bool:
+    data = request("activewindow")
+    return is_fullscreen(data if isinstance(data, dict) else None)
+
+
+def listen(on_event: Callable[[str, str], None], stop: threading.Event) -> None:
+    """Lit les événements Hyprland (« nom>>données ») et appelle `on_event(nom, données)`.
+
+    Bloquant : à lancer dans un thread. Se reconnecte si le socket se ferme.
+    """
+    path = socket_path(".socket2.sock")
+    if path is None:
+        return
+    while not stop.is_set():
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.connect(str(path))
+                for line in sock.makefile(encoding="utf-8", errors="replace"):
+                    name, _, data = line.rstrip("\n").partition(">>")
+                    on_event(name, data)
+                    if stop.is_set():
+                        return
+        except OSError:
+            pass
+        stop.wait(2)  # Hyprland redémarre ? on réessaie un peu plus tard

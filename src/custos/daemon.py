@@ -20,6 +20,8 @@ from custos.supervisor import EXIT_ALREADY_RUNNING, setup_logging
 log = logging.getLogger(__name__)
 
 MIN_SELECTION = 3  # caractères : en dessous, ce n'est sans doute pas une vraie sélection
+# Événements Hyprland après lesquels le plein écran a pu changer.
+FULLSCREEN_EVENTS = {"fullscreen", "activewindowv2", "workspacev2", "closewindow", "focusedmonv2"}
 RECENT_FAILURE = 30.0  # secondes : même durée que l'inquiétude de la mascotte
 IGNORED_EXIT_CODES = {130, 148}  # Ctrl+C et Ctrl+Z : interrompre n'est pas une erreur
 
@@ -32,6 +34,7 @@ class UI(Protocol):
     def end_answer(self, answer: str) -> None: ...
     def show_error(self, text: str) -> None: ...
     def show_notice(self, kind: str | None) -> None: ...
+    def set_hidden(self, hidden: bool) -> None: ...
 
 
 @dataclass
@@ -59,6 +62,7 @@ class Daemon:
         self.last_failure: dict | None = None  # dernière commande shell en échec
         self._failure_at = 0.0
         self.notice: Notice | None = None
+        self.hidden = False  # mascotte masquée par une fenêtre en plein écran
         self._last_selection_hash: int | None = None
         self._busy = threading.Lock()  # une seule question à Claude à la fois
 
@@ -138,6 +142,16 @@ class Daemon:
             self._last_selection_hash = hash(text)
         self.notice = Notice(kind, time.monotonic(), path)
         self.ui.show_notice(kind)
+
+    def on_hyprland_event(self, name: str, _data: str = "") -> None:
+        """Masque la mascotte tant que la fenêtre active est en plein écran (vidéo, jeu…)."""
+        if name not in FULLSCREEN_EVENTS or not self.config.mascot.hide_in_fullscreen:
+            return
+        hidden = hyprland.active_is_fullscreen()
+        if hidden != self.hidden:
+            self.hidden = hidden
+            log.info("plein écran : mascotte %s", "masquée" if hidden else "réaffichée")
+            self.ui.set_hidden(hidden)
 
     def _clear_notice(self) -> None:
         if self.notice:
@@ -247,6 +261,7 @@ def run() -> int:
 
     app = _gtk_app(config)
     watcher = None
+    stop_events = threading.Event()
     try:
         if app is None:
             from custos.ui.notify import NotifyUI
@@ -262,8 +277,13 @@ def run() -> int:
             ui.connect(daemon)
             handler.append(daemon.handle)
             watcher = _start_watcher(config, daemon)
+            threading.Thread(
+                target=hyprland.listen, args=(daemon.on_hyprland_event, stop_events), daemon=True
+            ).start()
+            daemon.on_hyprland_event("fullscreen")  # déjà en plein écran au démarrage ?
             _serve_with_gtk(server, app)
     finally:
+        stop_events.set()
         if watcher:
             watcher.stop()
         server.server_close()

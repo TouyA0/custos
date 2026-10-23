@@ -46,6 +46,9 @@ sélections ou commandes : seulement des événements, des tailles et des durée
 Glisse la mascotte où tu veux : sa position est mémorisée (`~/.local/state/custos/position.json` ;
 supprime ce fichier puis `custos restart` pour revenir au coin choisi dans la config).
 
+Elle disparaît quand une fenêtre passe en plein écran (vidéo, jeu, présentation) et revient
+ensuite ; une fenêtre simplement maximisée ne la cache pas (`hide_in_fullscreen` dans la config).
+
 Un clic sur la mascotte (ou `custos ask`) ouvre la bulle : tape ta question, Entrée,
 et la réponse s'affiche au fil de l'eau. Tu peux enchaîner avec une question de suivi ;
 Échap ou ✕ ferme la bulle et termine la conversation.

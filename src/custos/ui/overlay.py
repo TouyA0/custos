@@ -276,6 +276,10 @@ class MascotOverlay:
         if self.state is not MascotState.THINKING:
             self.set_state(MascotState.IDLE)
 
+    def set_hidden(self, hidden: bool) -> None:
+        # Seule la mascotte disparaît : une bulle ouverte reste là où tu l'as laissée.
+        self.window.set_visible(not hidden)
+
     def show_notice(self, kind: str | None, duration: float) -> None:
         self.widget.notice = kind
         if self._notice_timer:
@@ -339,6 +343,9 @@ class OverlayUI:
 
     def show_notice(self, kind: str | None) -> None:
         self._on_gtk_thread(lambda overlay: overlay.show_notice(kind, self.notice_duration))
+
+    def set_hidden(self, hidden: bool) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.set_hidden(hidden))
 
 
 class MascotApp(Gtk.Application):

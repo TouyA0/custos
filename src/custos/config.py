@@ -23,6 +23,7 @@ class MascotConfig:
     margin: int = 24
     size: int = 96
     sleep_after: int = 300
+    hide_in_fullscreen: bool = True
     outline: bool = True
     sprites_dir: str = ""
 
