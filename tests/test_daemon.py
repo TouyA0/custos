@@ -15,14 +15,26 @@ WINDOW = ActiveWindow("foot", "~", 0, 0, 100, 100)
 class FakeUI:
     def __init__(self) -> None:
         self.states: list[MascotState] = []
+        self.prompts: list[str] = []
+        self.questions: list[str] = []
+        self.chunks: list[str] = []
         self.answers: list[str] = []
         self.errors: list[str] = []
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
 
-    def show_answer(self, text: str) -> None:
-        self.answers.append(text)
+    def open_prompt(self, summary: str) -> None:
+        self.prompts.append(summary)
+
+    def start_answer(self, question: str) -> None:
+        self.questions.append(question)
+
+    def append_answer(self, text: str) -> None:
+        self.chunks.append(text)
+
+    def end_answer(self, answer: str) -> None:
+        self.answers.append(answer)
 
     def show_error(self, text: str) -> None:
         self.errors.append(text)
@@ -51,38 +63,93 @@ def use_context(monkeypatch: pytest.MonkeyPatch, ctx: Context) -> None:
     monkeypatch.setattr(context, "collect", lambda *a, **k: ctx)
 
 
-def test_ask_shows_answer(monkeypatch, ui, prompts) -> None:
+def test_question_from_cli_streams_answer(monkeypatch, ui, prompts) -> None:
     use_context(monkeypatch, Context(window=WINDOW))
     daemon.Daemon(Config(), ui).handle({"type": "ask", "question": "salut ?"})
-    assert ui.states == [MascotState.THINKING]
+    assert ui.questions == ["salut ?"]
+    assert ui.chunks == ["Bon", "jour ! "]
     assert ui.answers == ["Bonjour !"]
+    assert ui.states == [MascotState.THINKING, MascotState.TALKING]
     assert prompts[0][0].endswith("Question : salut ?")
 
 
-def test_ask_with_screenshot_sends_image_then_deletes_it(monkeypatch, ui, prompts, tmp_path) -> None:
+def test_shortcut_without_question_opens_prompt(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW, selection="ls -la"))
+    daemon.Daemon(Config(), ui).handle({"type": "ask", "selection": True})
+    assert ui.prompts == ["foot · sélection : 6 car."]
+    assert prompts == []
+
+
+def test_empty_question_uses_default_for_selection(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW, selection="ls -la"))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "selection": True})
+    d.answer("  ")
+    assert ui.questions == [context.DEFAULT_QUESTION]
+    assert "ls -la" in prompts[0][0]
+
+
+def test_empty_question_without_context_is_refused(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("")
+    assert prompts == []
+    assert ui.errors == ["Écris ta question."]
+
+
+def test_follow_up_includes_conversation(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("première ?")
+    d.answer("et ensuite ?")
+    assert "Moi : première ?\n\nToi : Bonjour !" in prompts[1][0]
+    assert prompts[1][0].endswith("Question : et ensuite ?")
+
+
+def test_new_shortcut_starts_new_conversation(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "question": "un"})
+    use_context(monkeypatch, Context(window=WINDOW))
+    d.handle({"type": "ask", "question": "deux"})
+    assert "Moi :" not in prompts[1][0]
+
+
+def test_screenshot_sent_once_then_deleted(monkeypatch, ui, prompts, tmp_path) -> None:
     shot = tmp_path / "custos.png"
     shot.write_bytes(b"png")
     use_context(monkeypatch, Context(window=WINDOW, screenshot=shot))
-    daemon.Daemon(Config(), ui).handle({"type": "ask", "screen": True})
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "screen": True})
+    d.answer("")
+    d.answer("et là ?")
     assert prompts[0][1] == [shot]
+    assert prompts[1][1] is None
     assert not shot.exists()
+
+
+def test_closing_deletes_unused_screenshot(monkeypatch, ui, prompts, tmp_path) -> None:
+    shot = tmp_path / "custos.png"
+    shot.write_bytes(b"png")
+    use_context(monkeypatch, Context(window=WINDOW, screenshot=shot))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "screen": True})
+    d.close_session()  # bulle fermée sans rien demander
+    assert not shot.exists()
+    assert prompts == []
 
 
 def test_blocked_window_never_calls_claude(monkeypatch, ui, prompts) -> None:
     use_context(monkeypatch, Context(window=WINDOW, blocked=True))
     daemon.Daemon(Config(), ui).handle({"type": "ask", "question": "salut ?"})
     assert prompts == []
+    assert ui.prompts == []
     assert "protégée" in ui.errors[0]
 
 
-def test_nothing_to_ask(monkeypatch, ui, prompts) -> None:
-    use_context(monkeypatch, Context(window=WINDOW))
-    daemon.Daemon(Config(), ui).handle({"type": "ask"})
-    assert prompts == []
-    assert ui.errors
-
-
-def test_claude_error_is_shown(monkeypatch, ui) -> None:
+def test_claude_error_is_shown_and_lock_released(monkeypatch, ui) -> None:
     def failing_ask(*a, **k):
         raise claude.ClaudeError("Not logged in")
         yield  # pragma: no cover
@@ -92,8 +159,8 @@ def test_claude_error_is_shown(monkeypatch, ui) -> None:
     d = daemon.Daemon(Config(), ui)
     d.handle({"type": "ask", "question": "?"})
     assert ui.errors == ["Not logged in"]
-    # Le verrou est bien relâché après une erreur.
-    d.handle({"type": "ask", "question": "?"})
+    assert ui.states[-1] is MascotState.IDLE
+    d.answer("?")
     assert len(ui.errors) == 2
 
 
@@ -112,10 +179,24 @@ def test_second_question_while_busy_is_refused(monkeypatch, ui) -> None:
     first.start()
     started.wait(2)
     d.handle({"type": "ask", "question": "2"})
+    d.answer("3")
     release.set()
     first.join(2)
     assert ui.answers == ["fini"]
-    assert "déjà" in ui.errors[0]
+    assert len(ui.errors) == 2
+    assert all("déjà" in e for e in ui.errors)
+
+
+def test_submit_answers_in_background(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    done = threading.Event()
+    original = ui.end_answer
+    monkeypatch.setattr(ui, "end_answer", lambda a: (original(a), done.set()))
+    d.submit("salut ?")
+    assert done.wait(2)
+    assert ui.answers == ["Bonjour !"]
 
 
 def test_failed_command_worries_without_calling_claude(ui, prompts) -> None:

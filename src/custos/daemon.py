@@ -6,11 +6,13 @@ import signal
 import sys
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from custos import claude, context, ipc
 from custos.config import Config, load
+from custos.context import Context
 from custos.states import MascotState
 
 log = logging.getLogger(__name__)
@@ -20,16 +22,28 @@ LAYER_SHELL_LIB = Path("/usr/lib/libgtk4-layer-shell.so")
 
 class UI(Protocol):
     def set_state(self, state: MascotState) -> None: ...
-    def show_answer(self, text: str) -> None: ...
+    def open_prompt(self, summary: str) -> None: ...
+    def start_answer(self, question: str) -> None: ...
+    def append_answer(self, text: str) -> None: ...
+    def end_answer(self, answer: str) -> None: ...
     def show_error(self, text: str) -> None: ...
+
+
+@dataclass
+class Session:
+    """Ce que Custos a lu au moment du raccourci, et la conversation qui a suivi."""
+
+    context: Context
+    history: list[tuple[str, str]] = field(default_factory=list)
 
 
 class Daemon:
     def __init__(self, config: Config, ui: UI) -> None:
         self.config = config
         self.ui = ui
+        self.session: Session | None = None
         self.last_failure: dict | None = None  # dernière commande shell en échec
-        self._busy = threading.Lock()  # une seule question à la fois
+        self._busy = threading.Lock()  # une seule question à Claude à la fois
 
     def handle(self, message: dict) -> None:
         match message.get("type"):
@@ -41,45 +55,74 @@ class Daemon:
                 log.warning("type de message inconnu : %s", other)
 
     def ask(self, message: dict) -> None:
+        """Raccourci ou `custos ask` : lit le contexte, puis répond ou ouvre la bulle."""
+        if self._busy.locked():
+            self.ui.show_error("Je réfléchis déjà à ta question précédente.")
+            return
+        ctx = context.collect(
+            self.config.privacy,
+            selection=bool(message.get("selection")),
+            screenshot=bool(message.get("screen")),
+        )
+        if ctx.blocked:
+            self.ui.show_error("Cette fenêtre est protégée : je n'ai rien lu.")
+            return
+
+        self.close_session()
+        self.session = Session(ctx)
+        if message.get("question"):
+            self.answer(message["question"])
+        else:
+            self.ui.open_prompt(context.describe(ctx))
+
+    def submit(self, question: str) -> None:
+        """Question tapée dans la bulle (thread GTK) : on répond dans un autre thread."""
+        threading.Thread(target=self.answer, args=(question,), daemon=True).start()
+
+    def close_session(self) -> None:
+        if self.session:
+            self.session.context.cleanup()
+            self.session = None
+
+    def answer(self, question: str) -> None:
+        session = self.session or Session(Context())
+        self.session = session
+        ctx = session.context
+        question = question.strip() or context.default_question(ctx) or ""
+        if not question:
+            self.ui.show_error("Écris ta question.")
+            return
         if not self._busy.acquire(blocking=False):
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
             return
-        ctx = None
         try:
-            ctx = context.collect(
-                self.config.privacy,
-                selection=bool(message.get("selection")),
-                screenshot=bool(message.get("screen")),
-            )
-            if ctx.blocked:
-                self.ui.show_error("Cette fenêtre est protégée : je n'ai rien lu.")
-                return
-
-            question = message.get("question")
-            if not question and not ctx.selection and not ctx.screenshot:
-                # La bulle de saisie viendra avec l'interface GTK.
-                self.ui.show_error("Pose ta question : custos ask \"…\"")
-                return
-
-            self.ui.set_state(MascotState.THINKING)
-            prompt = context.build_prompt(question, ctx)
+            prompt = context.build_prompt(question, ctx, session.history)
             images = [ctx.screenshot] if ctx.screenshot else None
             log.info(
-                "question (sélection : %d car., capture : %s)",
+                "question (sélection : %d car., capture : %s, échanges précédents : %d)",
                 len(ctx.selection),
                 "oui" if images else "non",
+                len(session.history),
             )
+            self.ui.set_state(MascotState.THINKING)
+            self.ui.start_answer(question)
             started = time.monotonic()
-            answer = "".join(claude.ask(prompt, self.config.claude, images=images))
+            chunks = []
+            for chunk in claude.ask(prompt, self.config.claude, images=images):
+                chunks.append(chunk)
+                self.ui.append_answer(chunk)
+            answer = "".join(chunks).strip()
             log.info("réponse en %.1f s (%d car.)", time.monotonic() - started, len(answer))
-            self.ui.show_answer(answer.strip())
+
+            session.history.append((question, answer))
+            ctx.cleanup()  # la capture n'est envoyée qu'avec la première question
+            self.ui.end_answer(answer)
+            self.ui.set_state(MascotState.TALKING)
         except claude.ClaudeError as exc:
             log.warning("erreur Claude : %s", exc)
             self.ui.set_state(MascotState.IDLE)
             self.ui.show_error(str(exc))
         finally:
-            if ctx:
-                ctx.cleanup()
             self._busy.release()
 
     def shell_event(self, message: dict) -> None:
@@ -136,7 +179,10 @@ def run() -> int:
         else:
             from custos.ui.overlay import OverlayUI
 
-            handler.append(Daemon(config, OverlayUI(app)).handle)
+            ui = OverlayUI(app)
+            daemon = Daemon(config, ui)
+            ui.connect(daemon)
+            handler.append(daemon.handle)
             _serve_with_gtk(server, app)
     finally:
         server.server_close()

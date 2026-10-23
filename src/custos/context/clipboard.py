@@ -24,3 +24,11 @@ def selection() -> str:
 
 def clipboard() -> str:
     return _paste()
+
+
+def copy(text: str) -> bool:
+    try:
+        subprocess.run(["wl-copy", "--", text], timeout=2, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True

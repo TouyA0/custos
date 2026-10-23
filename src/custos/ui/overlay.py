@@ -5,7 +5,9 @@ threads (serveur IPC, appels à Claude) passent par OverlayUI, qui s'y ramène
 avec GLib.idle_add.
 """
 
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import gi
@@ -21,8 +23,9 @@ from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.config import MascotConfig
 from custos.states import MascotState
-from custos.ui import notify
 from custos.ui.animation import BLINK_SPRITE, SPRITES, Animator
+from custos.ui.bubble import CSS as BUBBLE_CSS
+from custos.ui.bubble import Bubble
 
 APP_ID = "io.github.touya0.Custos"
 PADDING = 0.1  # marge autour du sprite (fraction de la taille) pour le flottement et le rebond
@@ -133,6 +136,7 @@ class MascotWidget(Gtk.Widget):
 class MascotOverlay:
     def __init__(self, app: Gtk.Application, config: MascotConfig) -> None:
         folder = Path(config.sprites_dir).expanduser() if config.sprites_dir else DEFAULT_SPRITES
+        self.app = app
         self.animator = Animator(config.sleep_after, now=time.monotonic())
 
         self.window = Gtk.Window(application=app, title="Custos", decorated=False)
@@ -148,13 +152,20 @@ class MascotOverlay:
         scale = self.window.get_scale_factor()
         sprites = load_sprites(folder, config.size * scale, config.outline)
         self.widget = MascotWidget(config, sprites, self.animator)
+        self.bubble = Bubble(
+            app,
+            config,
+            mascot_height=round(config.size * (1 + 2 * PADDING)),
+            on_submit=lambda question: app.on_submit(question),
+            on_close=lambda: app.on_close(),
+        )
         click = Gtk.GestureClick()
         click.connect("released", self._on_click)
         self.widget.add_controller(click)
         self.window.set_child(self.widget)
 
         css = Gtk.CssProvider()
-        css.load_from_string("window.custos { background: transparent; }")
+        css.load_from_string("window.custos { background: transparent; }" + BUBBLE_CSS)
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
@@ -167,7 +178,11 @@ class MascotOverlay:
         self.animator.set_state(state, time.monotonic())
 
     def _on_click(self, *_args) -> None:
-        # Pour l'instant, un clic la réveille ou la calme. La bulle de saisie viendra ici.
+        # Un clic ouvre la bulle (ou la ferme si elle est déjà ouverte).
+        if self.bubble.visible:
+            self.bubble.close()
+        else:
+            self.app.on_open()
         if self.state is not MascotState.THINKING:
             self.set_state(MascotState.IDLE)
 
@@ -181,21 +196,40 @@ class OverlayUI:
     def __init__(self, app: "MascotApp") -> None:
         self.app = app
 
-    def _set_state_now(self, state: MascotState) -> bool:
-        if self.app.overlay:
-            self.app.overlay.set_state(state)
-        return GLib.SOURCE_REMOVE
+    def connect(self, daemon) -> None:
+        """Relie la mascotte et la bulle au daemon."""
+        self.app.on_submit = daemon.submit
+        self.app.on_close = daemon.close_session
+        # Le clic arrive dans le thread GTK ; lire le contexte appelle hyprctl et wl-paste.
+        self.app.on_open = lambda: threading.Thread(
+            target=daemon.ask, args=({"type": "ask"},), daemon=True
+        ).start()
+
+    def _on_gtk_thread(self, action: Callable[[MascotOverlay], None]) -> None:
+        def run() -> bool:
+            if self.app.overlay:
+                action(self.app.overlay)
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(run)
 
     def set_state(self, state: MascotState) -> None:
-        GLib.idle_add(self._set_state_now, state)
+        self._on_gtk_thread(lambda overlay: overlay.set_state(state))
 
-    def show_answer(self, text: str) -> None:
-        # En attendant la bulle, la réponse passe encore par une notification.
-        self.set_state(MascotState.TALKING)
-        notify.notify("Custos", text)
+    def open_prompt(self, summary: str) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.open_prompt(summary))
+
+    def start_answer(self, question: str) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.start_answer(question))
+
+    def append_answer(self, text: str) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.append_answer(text))
+
+    def end_answer(self, answer: str) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.end_answer(answer))
 
     def show_error(self, text: str) -> None:
-        notify.notify("Custos — oups", text)
+        self._on_gtk_thread(lambda overlay: overlay.bubble.show_error(text))
 
 
 class MascotApp(Gtk.Application):
@@ -203,6 +237,10 @@ class MascotApp(Gtk.Application):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.config = config
         self.overlay: MascotOverlay | None = None
+        # Remplacés par OverlayUI.connect une fois le daemon créé.
+        self.on_submit: Callable[[str], None] = lambda question: None
+        self.on_close: Callable[[], None] = lambda: None
+        self.on_open: Callable[[], None] = lambda: None
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, app: Gtk.Application) -> None:

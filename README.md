@@ -35,7 +35,11 @@ Lancer la mascotte :
 ```
 
 Le daemon se relance tout seul avec `LD_PRELOAD=libgtk4-layer-shell.so`, nécessaire
-à gtk4-layer-shell depuis Python. Un clic sur la mascotte la réveille ou la calme.
+à gtk4-layer-shell depuis Python.
+
+Un clic sur la mascotte (ou `custos ask`) ouvre la bulle : tape ta question, Entrée,
+et la réponse s'affiche au fil de l'eau. Tu peux enchaîner avec une question de suivi ;
+Échap ou ✕ ferme la bulle et termine la conversation.
 
 Intégrations : `integrations/hyprland/custos.lua` (démarrage et raccourcis) et
 `integrations/shell/custos.bash` (hook bash).
@@ -53,6 +57,8 @@ src/custos/
 ├── context/        fenêtre active, sélection, capture, filtrage des secrets
 └── ui/
     ├── overlay.py  la mascotte : fenêtre layer-shell GTK4, au-dessus de tout
+    ├── bubble.py   bulle de dialogue : saisie, réponse en streaming, copie
+    ├── markdown.py Markdown des réponses → balisage Pango
     ├── animation.py  flottement, clignement, endormissement (sans GTK, testé)
     └── notify.py   notifications (réponses, et repli si l'overlay est impossible)
 assets/sprites/     images de la mascotte, un dossier par état

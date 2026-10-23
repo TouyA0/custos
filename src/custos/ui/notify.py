@@ -33,7 +33,7 @@ def notify(title: str, body: str, replace_id: int | None = None) -> int | None:
 
 
 class NotifyUI:
-    """Même rôle que la future mascotte : changer d'état et afficher une réponse."""
+    """Repli sans overlay : même interface que la bulle (voir daemon.UI), par notifications."""
 
     def __init__(self) -> None:
         self.state = MascotState.IDLE
@@ -45,9 +45,18 @@ class NotifyUI:
         if message:
             self._notification = notify("Custos", message, self._notification)
 
-    def show_answer(self, text: str) -> None:
-        self.state = MascotState.TALKING
-        self._notification = notify("Custos", text, self._notification)
+    def open_prompt(self, summary: str) -> None:
+        # Pas de bulle de saisie sans overlay.
+        self.show_error('Pose ta question : custos ask "…"')
+
+    def start_answer(self, question: str) -> None:
+        pass
+
+    def append_answer(self, text: str) -> None:
+        pass
+
+    def end_answer(self, answer: str) -> None:
+        self._notification = notify("Custos", answer, self._notification)
 
     def show_error(self, text: str) -> None:
         self._notification = notify("Custos — oups", text, self._notification)

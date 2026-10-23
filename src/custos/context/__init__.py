@@ -41,8 +41,36 @@ def collect(config: PrivacyConfig, selection: bool = False, screenshot: bool = F
     return context
 
 
-def build_prompt(question: str | None, context: Context) -> str:
+def describe(context: Context) -> str:
+    """Résumé court de ce que Custos a lu, affiché en haut de la bulle."""
     parts = []
+    if context.window:
+        parts.append(context.window.window_class)
+    if context.selection:
+        parts.append(f"sélection : {len(context.selection)} car.")
+    if context.screenshot:
+        parts.append("capture jointe")
+    return " · ".join(parts)
+
+
+def default_question(context: Context) -> str | None:
+    """Question utilisée quand on valide la bulle sans rien écrire."""
+    if context.selection:
+        return DEFAULT_QUESTION
+    if context.screenshot:
+        return "Que vois-tu ? Aide-moi."
+    return None
+
+
+def build_prompt(
+    question: str | None,
+    context: Context,
+    history: list[tuple[str, str]] | None = None,
+) -> str:
+    parts = []
+    if history:
+        exchanges = "\n\n".join(f"Moi : {q}\n\nToi : {a}" for q, a in history)
+        parts.append(f"Notre conversation jusqu'ici :\n\n{exchanges}")
     if context.window and not context.blocked:
         title = privacy.redact_secrets(context.window.title)
         parts.append(f"Fenêtre active : {context.window.window_class} — « {title} »")
@@ -51,7 +79,6 @@ def build_prompt(question: str | None, context: Context) -> str:
     if context.selection:
         parts.append(f"Texte sélectionné :\n```\n{context.selection}\n```")
 
-    if not question:
-        question = DEFAULT_QUESTION if context.selection else "Que vois-tu ? Aide-moi."
+    question = question or default_question(context) or "Aide-moi."
     parts.append(f"Question : {question}")
     return "\n\n".join(parts)
