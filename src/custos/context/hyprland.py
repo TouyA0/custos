@@ -65,6 +65,15 @@ def send_shortcut(mods: str, key: str, address: str) -> bool:
     return False
 
 
+def focus_window(address: str) -> bool:
+    """Donne le focus à une fenêtre (et affiche son espace de travail)."""
+    lua = f'hl.dsp.focus({{ window = "address:{address}" }})'
+    return any(
+        _send(command) == b"ok"
+        for command in (f"dispatch {lua}", f"dispatch focuswindow address:{address}")
+    )
+
+
 def cursor_position() -> tuple[int, int] | None:
     data = request("cursorpos")
     if not isinstance(data, dict):
@@ -169,6 +178,18 @@ def find_window(address: str) -> ActiveWindow | None:
     for client in clients:
         if client.get("address") == address and client.get("mapped", True):
             return parse(client)
+    return None
+
+
+def window_of(pids: list[int]) -> ActiveWindow | None:
+    """Fenêtre dont le processus est l'un de `pids` (les parents d'un programme en terminal)."""
+    clients = request("clients")
+    if not isinstance(clients, list):
+        return None
+    by_pid = {c.get("pid"): c for c in clients if c.get("mapped", True)}
+    for pid in pids:  # du plus proche au plus lointain : le terminal avant la session
+        if pid in by_pid:
+            return parse(by_pid[pid])
     return None
 
 

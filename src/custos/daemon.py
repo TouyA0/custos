@@ -36,6 +36,10 @@ IGNORED_EXIT_CODES = {130, 148}  # Ctrl+C et Ctrl+Z : interrompre n'est pas une 
 OUTPUT_TERMINALS = {"foot"}
 OUTPUT_SHORTCUT = ("CTRL SHIFT ALT", "F12")
 OUTPUT_DELAY = 0.3  # secondes : le temps que le terminal marque la fin de la sortie
+# Sessions Claude Code (hooks, voir integrations/claude-code) : badges sur la mascotte.
+AGENT_WAITING = "agent-waiting"  # attend ta permission ou ta réponse : reste affiché
+AGENT_DONE = "agent-done"  # a fini de répondre
+WAITING_NOTIFICATIONS = {"permission_prompt", "elicitation_dialog"}
 OUTPUT_TIMEOUT = 5.0  # secondes : au-delà, une sortie reçue n'est plus celle demandée
 
 
@@ -62,6 +66,29 @@ class Notice:
     kind: str  # voir watch.SELECTION, CLIPBOARD_IMAGE, SCREENSHOT
     at: float
     path: str | None = None  # fichier de la capture caelestia
+
+
+@dataclass
+class Agent:
+    """Une session Claude Code suivie grâce à ses hooks."""
+
+    session: str
+    project: str  # nom du dossier où elle tourne
+    state: str  # working, waiting ou done
+    pids: list[int]  # processus parents du hook : Claude Code, le shell, le terminal…
+    at: float
+
+    def alive(self) -> bool:
+        """Claude Code tourne encore (sans hook SessionEnd s'il a été tué)."""
+        # pids[0] est le shell éphémère qui lance le hook ; pids[1], Claude Code.
+        pid = self.pids[1] if len(self.pids) > 1 else (self.pids[0] if self.pids else 0)
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, ValueError):
+            return False
+        except PermissionError:
+            pass
+        return pid > 0
 
 
 @dataclass
@@ -92,6 +119,7 @@ class Daemon:
         self._cancel = threading.Event()  # levé quand on ferme la carte : la réponse s'arrête
         self._closed_at = 0.0
         self._machine: str | None = None  # détectée à la première question
+        self.agents: dict[str, Agent] = {}  # sessions Claude Code, par identifiant
 
     def handle(self, message: dict) -> None:
         match message.get("type"):
@@ -101,6 +129,8 @@ class Daemon:
                 self.shell_event(message)
             case "shell-output":
                 self.shell_output(message)
+            case "agent-event":
+                self.agent_event(message)
             case "attach":
                 self.attach_active()
             case "detach":
@@ -177,14 +207,24 @@ class Daemon:
         """Clic sur la mascotte : propose d'abord ce qu'elle vient de remarquer.
 
         Par ordre de priorité : une commande qui vient d'échouer, une sélection ou une
-        image remarquée, sinon une bulle vide.
+        image remarquée, sinon une bulle vide. Avant tout ça : un agent Claude Code qui
+        attend ou qui a fini, dont elle affiche la fenêtre.
         """
+        waiting = self._waiting_agent()
+        if waiting:
+            self._go_to_agent(waiting)  # le plus urgent : un agent est bloqué
+            return
         now = time.monotonic()
         failure = self.last_failure if now - self._failure_at < RECENT_FAILURE else None
-        notice = self.notice if self.notice and now - self.notice.at < self.config.notice.duration else None
+        notice = self.notice if self.notice and self._fresh(self.notice, now) else None
         self.last_failure = None
         self._clear_notice()
 
+        if notice and notice.kind == AGENT_DONE:
+            agent = self.agents.get(notice.path or "")
+            if agent:
+                self._go_to_agent(agent)
+            return
         if failure:
             # La fenêtre active est sans doute le terminal : sa capture montre le message d'erreur.
             self.ask({"type": "ask", "screen": True, "failure": failure})
@@ -214,7 +254,11 @@ class Daemon:
                 return
             self._last_selection_hash = hash(text)
         self.notice = Notice(kind, time.monotonic(), path)
-        self.ui.show_notice(kind)
+        self._show_badge()
+
+    def _fresh(self, notice: Notice, now: float) -> bool:
+        # « Agent fini » reste jusqu'à ce que tu ailles voir ; le reste s'éteint tout seul.
+        return notice.kind == AGENT_DONE or now - notice.at < self.config.notice.duration
 
     def _attached_window(self, message: dict) -> hyprland.ActiveWindow | None:
         """Fenêtre accrochée à lire, pour une question « simple » (sans sélection, image ni erreur)."""
@@ -244,13 +288,15 @@ class Daemon:
         self.monitor = name
         self.on_hyprland_event("fullscreen")
 
-    def on_hyprland_event(self, name: str, _data: str = "") -> None:
+    def on_hyprland_event(self, name: str, data: str = "") -> None:
         """Masque la mascotte tant qu'une fenêtre est en plein écran (vidéo, jeu…) sur son écran.
 
         Suit aussi les écrans branchés ou débranchés.
         """
         if name in MONITOR_EVENTS:
             self.ui.monitors_changed()
+        if name == "activewindowv2":
+            self._seen_done_agent(data)
         if name not in FULLSCREEN_EVENTS or not self.config.mascot.hide_in_fullscreen:
             return
         if self.monitor:
@@ -265,7 +311,78 @@ class Daemon:
     def _clear_notice(self) -> None:
         if self.notice:
             self.notice = None
-            self.ui.show_notice(None)
+            self._show_badge()
+
+    def _show_badge(self) -> None:
+        """Badge de la mascotte : un agent qui attend passe avant tout le reste."""
+        if self._waiting_agent():
+            self.ui.show_notice(AGENT_WAITING)
+        else:
+            self.ui.show_notice(self.notice.kind if self.notice else None)
+
+    # --- sessions Claude Code ------------------------------------------------------
+
+    def agent_event(self, message: dict) -> None:
+        """Hook d'une session Claude Code : elle travaille, attend, a fini ou se ferme."""
+        if not self.config.agents.enabled:
+            return
+        session = message.get("session") or ""
+        cwd = message.get("cwd") or ""
+        if not session or Path(cwd) == claude.conversations_dir():
+            return  # la conversation de Custos ouverte en grand : elle a déjà sa bulle
+        event = message.get("event")
+        if event == "SessionEnd":
+            self.agents.pop(session, None)
+            self._show_badge()
+            return
+        state = {"UserPromptSubmit": "working", "PostToolUse": "working", "Stop": "done"}.get(event)
+        if event == "Notification":
+            kind = message.get("notification") or ""
+            text = (message.get("message") or "").lower()
+            if kind in WAITING_NOTIFICATIONS or (not kind and "permission" in text):
+                state = "waiting"
+        if state is None:
+            return
+        previous = self.agents.get(session)
+        if previous and previous.state == state:
+            return  # PostToolUse arrive à chaque outil : rien de neuf
+        pids = [int(p) for p in message.get("pids") or [] if str(p).isdigit()]
+        agent = Agent(session, Path(cwd).name or "Claude Code", state, pids, time.monotonic())
+        self.agents[session] = agent
+        log.info("agent %s : %s", agent.project, state)
+        if state == "done":
+            # Comme une sélection remarquée : un clic y mène, le badge s'éteint tout seul.
+            self.notice = Notice(AGENT_DONE, agent.at, session)
+        elif self.notice and self.notice.kind == AGENT_DONE and self.notice.path == session:
+            self.notice = None  # elle s'est remise au travail
+        self._show_badge()
+
+    def _seen_done_agent(self, address: str) -> None:
+        """Tu passes sur la fenêtre de l'agent qui a fini : son badge s'éteint."""
+        notice = self.notice
+        if not notice or notice.kind != AGENT_DONE:
+            return
+        agent = self.agents.get(notice.path or "")
+        window = hyprland.window_of(agent.pids) if agent else None
+        if agent is None or (window and window.address == f"0x{address.removeprefix('0x')}"):
+            self._clear_notice()
+
+    def _waiting_agent(self) -> Agent | None:
+        """Le plus ancien agent qui attend encore (ceux dont Claude Code a disparu sont oubliés)."""
+        for session, agent in list(self.agents.items()):
+            if not agent.alive():
+                del self.agents[session]
+        waiting = [a for a in self.agents.values() if a.state == "waiting"]
+        return min(waiting, key=lambda a: a.at) if waiting else None
+
+    def _go_to_agent(self, agent: Agent) -> None:
+        """Clic sur la mascotte : t'emmène dans la fenêtre de cet agent."""
+        window = hyprland.window_of(agent.pids)
+        if window and window.address and hyprland.focus_window(window.address):
+            log.info("fenêtre de l'agent %s affichée", agent.project)
+            return
+        what = "attend ta réponse" if agent.state == "waiting" else "a fini"
+        self.ui.show_error(f"Claude Code ({agent.project}) {what}, mais je ne trouve pas sa fenêtre.")
 
     def _copy_noticed_image(self, notice: Notice) -> Path | None:
         """Copie temporaire de l'image : la session la supprime après usage, pas l'original."""

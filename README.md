@@ -110,6 +110,12 @@ source ~/Documents/Projets/custos/integrations/shell/custos.fish
 
 Puis `hyprctl reload`. Un hook bash existe aussi : `integrations/shell/custos.bash`.
 
+**Tes sessions Claude Code** : avec les hooks de `integrations/claude-code/settings.json`
+ajoutés à `~/.claude/settings.json`, la mascotte affiche ✋ quand une session attend ta
+permission et ✅ quand elle a fini. Un clic t'emmène dans sa fenêtre (terminal, VS Code,
+appli Claude…). ✋ reste tant qu'elle attend, ✅ jusqu'à ce que tu ailles voir. Tout est local :
+Custos ne lit que l'état de la session, jamais son contenu (`[agents]` dans la config).
+
 Pour que Claude voie aussi la **sortie d'une commande en échec** (le message d'erreur, pas
 seulement la commande), ajoute le raccourci de `integrations/terminal/foot.ini` à
 `~/.config/foot/foot.ini` et `capture_output = true` dans la section `[shell]` de la config.
@@ -142,6 +148,6 @@ src/custos/
 assets/sprites/     images de la mascotte, un dossier par état
 assets/icon.png     icône de la barre
 scripts/            préparation des sprites
-integrations/       snippets Hyprland (Lua), shell (fish, bash) et terminal (foot)
+integrations/       snippets Hyprland (Lua), shell (fish, bash), terminal (foot), Claude Code
 tests/
 ```

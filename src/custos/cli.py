@@ -5,7 +5,10 @@ Hyprland ou le hook shell) lui envoient simplement un message via le socket.
 """
 
 import argparse
+import json
+import os
 import sys
+from pathlib import Path
 
 from custos import __version__, ipc, supervisor
 
@@ -47,7 +50,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="transmet la sortie de la dernière commande, lue sur l'entrée standard (terminal)",
     )
 
+    sub.add_parser(
+        "agent-event",
+        help="signale l'état d'une session Claude Code (hook, JSON sur l'entrée standard)",
+    )
+
     return parser
+
+
+def ancestors(pid: int, limit: int = 64) -> list[int]:
+    """`pid` et ses parents, jusqu'à init : pour retrouver la fenêtre qui les contient."""
+    pids = []
+    while pid > 1 and len(pids) < limit:
+        pids.append(pid)
+        try:
+            # « pid (nom) état ppid … » : le nom peut contenir des espaces, on part de la fin.
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            pid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return pids
+
+
+def agent_event(raw: str) -> dict | None:
+    """Message pour le daemon à partir de l'entrée d'un hook Claude Code."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not data.get("session_id"):
+        return None
+    return {
+        "type": "agent-event",
+        "event": data.get("hook_event_name", ""),
+        "session": data["session_id"],
+        "cwd": data.get("cwd", ""),
+        "notification": data.get("notification_type", ""),
+        "message": (data.get("message") or "")[:200],
+        "pids": ancestors(os.getppid()),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -88,6 +129,14 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except ipc.DaemonNotRunning:
                 pass  # appelé après chaque commande : silencieux si Custos ne tourne pas
+        elif args.subcommand == "agent-event":
+            # Appelé par Claude Code : jamais d'erreur, même sans daemon ou entrée illisible.
+            message = agent_event(sys.stdin.read(MAX_OUTPUT))
+            if message:
+                try:
+                    ipc.send(message)
+                except ipc.DaemonNotRunning:
+                    pass
         elif args.subcommand == "shell-output":
             output = sys.stdin.read()[-MAX_OUTPUT:]
             try:

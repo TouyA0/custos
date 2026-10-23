@@ -47,7 +47,14 @@ BADGE_PULSE = 1.4  # secondes
 BADGE_BORDER_WIDTH = 2.0
 BADGE_FILL = Gdk.RGBA(red=0.937, green=0.914, blue=0.875, alpha=1.0)  # crème #efe9df
 BADGE_BORDER = Gdk.RGBA(red=0.122, green=0.176, blue=0.310, alpha=1.0)  # marine #1f2d4f
-BADGE_ICONS = {"selection": "📋", "clipboard-image": "🖼\ufe0f", "screenshot": "🖼\ufe0f"}
+BADGE_ICONS = {
+    "selection": "📋",
+    "clipboard-image": "🖼\ufe0f",
+    "screenshot": "🖼\ufe0f",
+    "agent-waiting": "✋",  # une session Claude Code attend ta permission
+    "agent-done": "✅",  # une session Claude Code a fini
+}
+PERSISTENT_BADGES = {"agent-waiting", "agent-done"}  # restent jusqu'à ce que tu ailles voir
 
 FOLLOW_INTERVAL = 200  # ms entre deux lectures de la position de la fenêtre accrochée
 DRAG_THRESHOLD = 6  # pixels : en dessous, c'est un clic
@@ -581,7 +588,8 @@ class MascotOverlay:
         if kind:
             if self.state is MascotState.SLEEPING:
                 self.set_state(MascotState.IDLE)  # tu es là : elle se réveille
-            self._notice_timer = GLib.timeout_add(int(duration * 1000), self._expire_notice)
+            if kind not in PERSISTENT_BADGES:
+                self._notice_timer = GLib.timeout_add(int(duration * 1000), self._expire_notice)
 
     def _expire_notice(self) -> bool:
         self._notice_timer = 0

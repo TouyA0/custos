@@ -64,6 +64,12 @@ class ShellConfig:
 
 
 @dataclass
+class AgentsConfig:
+    # Badges pour les sessions Claude Code (hooks : integrations/claude-code/settings.json).
+    enabled: bool = True
+
+
+@dataclass
 class NoticeConfig:
     selection: bool = True
     images: bool = True
@@ -79,6 +85,7 @@ class Config:
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     shell: ShellConfig = field(default_factory=ShellConfig)
     notice: NoticeConfig = field(default_factory=NoticeConfig)
+    agents: AgentsConfig = field(default_factory=AgentsConfig)
 
 
 def load(path: Path | None = None) -> Config:
@@ -96,4 +103,5 @@ def load(path: Path | None = None) -> Config:
         privacy=PrivacyConfig(**data.get("privacy", {})),
         shell=ShellConfig(**data.get("shell", {})),
         notice=NoticeConfig(**data.get("notice", {})),
+        agents=AgentsConfig(**data.get("agents", {})),
     )

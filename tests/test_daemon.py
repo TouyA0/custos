@@ -737,3 +737,94 @@ def test_system_prompt_has_machine_and_persona(monkeypatch, ui) -> None:
     assert "Sa machine (détectée automatiquement) :\n- Distribution : Arch" in prompt
     assert "Tu es taquin." in prompt
     assert prompt.endswith(claude.BREVITY)
+
+
+@pytest.fixture
+def agents(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Sessions Claude Code toujours vivantes, fenêtre trouvée par PID, focus noté."""
+    state: dict = {"focused": [], "window": ActiveWindow("foot", "claude", 0, 0, 9, 9, address="0xf00")}
+    monkeypatch.setattr(daemon.Agent, "alive", lambda self: True)
+    monkeypatch.setattr(daemon.hyprland, "window_of", lambda pids: state["window"])
+    monkeypatch.setattr(
+        daemon.hyprland, "focus_window", lambda address: state["focused"].append(address) or True
+    )
+    return state
+
+
+def agent(event: str, session: str = "s1", **extra) -> dict:
+    return {"type": "agent-event", "event": event, "session": session, "cwd": "/home/q/projet",
+            "pids": [10, 11, 12], **extra}
+
+
+def test_waiting_agent_badge_and_click_goes_to_its_window(ui, agents) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(agent("UserPromptSubmit"))
+    assert ui.notices == [None]
+    d.handle(agent("Notification", notification="permission_prompt"))
+    assert ui.notices[-1] == daemon.AGENT_WAITING
+    d.on_watch_event(watch.SCREENSHOT, "/tmp/x.png")
+    assert ui.notices[-1] == daemon.AGENT_WAITING  # passe avant une capture remarquée
+    d.open_from_mascot()
+    assert agents["focused"] == ["0xf00"]
+    assert ui.prompts == []  # pas de bulle : on va dans sa fenêtre
+    d.handle(agent("PostToolUse"))  # permission donnée, il reprend
+    assert ui.notices[-1] == watch.SCREENSHOT
+
+
+def test_idle_notification_is_not_waiting(ui, agents) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(agent("Notification", notification="idle_prompt"))
+    assert d.agents == {}
+
+
+def test_done_agent_badge_stays_until_its_window_is_seen(ui, agents) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(agent("Stop"))
+    assert ui.notices[-1] == daemon.AGENT_DONE
+    d.on_hyprland_event("activewindowv2", "abc")  # une autre fenêtre
+    assert d.notice is not None
+    d.on_hyprland_event("activewindowv2", "f00")  # la sienne
+    assert d.notice is None and ui.notices[-1] is None
+
+
+def test_click_on_done_agent_goes_to_its_window(ui, agents) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(agent("Stop"))
+    d.open_from_mascot()
+    assert agents["focused"] == ["0xf00"]
+    assert d.notice is None
+
+
+def test_agent_without_window_explains(ui, agents) -> None:
+    agents["window"] = None
+    d = daemon.Daemon(Config(), ui)
+    d.handle(agent("Notification", message="Claude needs your permission to use Bash"))
+    d.open_from_mascot()
+    assert ui.errors == ["Claude Code (projet) attend ta réponse, mais je ne trouve pas sa fenêtre."]
+
+
+def test_session_end_and_custos_own_conversation(ui, agents) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(agent("Notification", notification="permission_prompt"))
+    d.handle(agent("SessionEnd"))
+    assert d.agents == {} and ui.notices[-1] is None
+    d.handle(agent("Stop", cwd=str(claude.conversations_dir())))
+    assert d.agents == {}
+
+
+def test_agents_can_be_disabled(ui, agents) -> None:
+    config = Config()
+    config.agents.enabled = False
+    d = daemon.Daemon(config, ui)
+    d.handle(agent("Stop"))
+    assert d.agents == {}
+
+
+def test_cli_agent_event_from_hook_input() -> None:
+    raw = '{"session_id": "s1", "hook_event_name": "Notification", "cwd": "/p",' \
+          ' "notification_type": "permission_prompt", "message": "besoin de permission"}'
+    message = cli.agent_event(raw)
+    assert message["event"] == "Notification" and message["notification"] == "permission_prompt"
+    assert message["pids"] and all(isinstance(p, int) for p in message["pids"])
+    assert cli.agent_event("pas du json") is None
+    assert cli.agent_event('{"hook_event_name": "Stop"}') is None

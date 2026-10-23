@@ -40,3 +40,8 @@ images = true       # image copiée dans le presse-papier
 screenshots = true  # capture de zone caelestia (SUPER + SHIFT + S)
 screenshot_glob = "/tmp/caelestia-picker-*.png"
 duration = 10       # secondes d'affichage du badge
+
+[agents]
+# Badges pour tes sessions Claude Code : ✋ attend ta permission, ✅ a fini (un clic va à sa
+# fenêtre). Nécessite les hooks de integrations/claude-code/settings.json.
+enabled = true
