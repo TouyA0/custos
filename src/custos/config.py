@@ -1,6 +1,7 @@
 """Chargement de la configuration depuis ~/.config/custos/config.toml."""
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +10,24 @@ from pathlib import Path
 def config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
     return Path(base) / "custos" / "config.toml"
+
+
+MAX_PERSONA = 4_000  # caractères : il est envoyé avec chaque question
+
+
+def persona_path() -> Path:
+    """custos.md : son caractère et ce qu'il doit savoir de toi, écrit par toi."""
+    return config_path().parent / "custos.md"
+
+
+def load_persona(path: Path | None = None) -> str:
+    """Contenu de custos.md, sans les commentaires <!-- … --> (les explications du modèle)."""
+    try:
+        text = (path or persona_path()).read_text()
+    except OSError:
+        return ""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL).strip()
+    return text[:MAX_PERSONA]
 
 
 @dataclass

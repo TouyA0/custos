@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from custos import claude, context, ipc, watch
-from custos.config import Config, load
+from custos import claude, context, ipc, machine, watch
+from custos.config import Config, load, load_persona
 from custos.context import Context, clipboard, hyprland, privacy
 from custos.states import MascotState
 from custos.supervisor import EXIT_ALREADY_RUNNING, setup_logging
@@ -91,6 +91,7 @@ class Daemon:
         self._busy = threading.Lock()  # une seule question à Claude à la fois
         self._cancel = threading.Event()  # levé quand on ferme la carte : la réponse s'arrête
         self._closed_at = 0.0
+        self._machine: str | None = None  # détectée à la première question
 
     def handle(self, message: dict) -> None:
         match message.get("type"):
@@ -324,6 +325,7 @@ class Daemon:
                 prompt,
                 self.config.claude,
                 images=images,
+                system_prompt=self._system_prompt(),
                 resume=resume,
                 on_session=remember,
                 cancel=self._cancel,
@@ -347,6 +349,12 @@ class Daemon:
             self.ui.show_error(str(exc))
         finally:
             self._busy.release()
+
+    def _system_prompt(self) -> str:
+        """Machine détectée une fois ; custos.md relu à chaque question (modifiable à chaud)."""
+        if self._machine is None:
+            self._machine = machine.describe(self.config.claude.open_command)
+        return claude.build_system_prompt(self._machine, load_persona())
 
     def open_full(self) -> None:
         """Ouvre la conversation en cours en grand : Claude Code dans un terminal."""

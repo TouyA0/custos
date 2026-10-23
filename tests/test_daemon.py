@@ -67,6 +67,13 @@ class FakeUI:
         self.monitor_changes += 1
 
 
+@pytest.fixture(autouse=True)
+def no_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ni détection de la vraie machine, ni lecture du vrai custos.md."""
+    monkeypatch.setattr(daemon.machine, "describe", lambda _command: "- Distribution : Arch")
+    monkeypatch.setattr(daemon, "load_persona", lambda: "")
+
+
 @pytest.fixture
 def ui() -> FakeUI:
     return FakeUI()
@@ -77,7 +84,9 @@ def prompts(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list | None]]:
     """Remplace Claude : renvoie toujours « Bonjour ! » et note les prompts reçus."""
     sent: list[tuple[str, list | None]] = []
 
-    def fake_ask(prompt, config, images=None, resume=None, on_session=None, cancel=None):
+    def fake_ask(
+        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None
+    ):
         sent.append((prompt, images))
         if on_session:
             on_session("session-1")
@@ -130,7 +139,9 @@ def test_empty_question_without_context_is_refused(monkeypatch, ui, prompts) -> 
 def test_follow_up_resumes_claude_session(monkeypatch, ui) -> None:
     calls = []
 
-    def fake_ask(prompt, config, images=None, resume=None, on_session=None, cancel=None):
+    def fake_ask(
+        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None
+    ):
         calls.append((prompt, resume))
         on_session("session-1")
         yield "ok"
@@ -558,7 +569,9 @@ def test_plus_button_starts_new_conversation(monkeypatch, ui, prompts) -> None:
 def test_closing_interrupts_answer(monkeypatch, ui) -> None:
     started = threading.Event()
 
-    def endless_ask(prompt, config, images=None, resume=None, on_session=None, cancel=None):
+    def endless_ask(
+        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None
+    ):
         on_session("session-1")
         started.set()
         yield "Il était une fois"
@@ -716,3 +729,11 @@ def test_monitor_events_are_forwarded_and_fullscreen_is_per_monitor(monkeypatch,
     assert d.hidden is False
     d.set_monitor("HDMI-A-1")
     assert ui.hidden == [True]
+
+
+def test_system_prompt_has_machine_and_persona(monkeypatch, ui) -> None:
+    monkeypatch.setattr(daemon, "load_persona", lambda: "Tu es taquin.")
+    prompt = daemon.Daemon(Config(), ui)._system_prompt()
+    assert "Sa machine (détectée automatiquement) :\n- Distribution : Arch" in prompt
+    assert "Tu es taquin." in prompt
+    assert prompt.endswith(claude.BREVITY)

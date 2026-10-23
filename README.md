@@ -29,6 +29,7 @@ Et [Claude Code](https://claude.com/claude-code), connecté à ton compte (`clau
 python -m venv --system-site-packages .venv
 .venv/bin/pip install -e '.[dev]'
 mkdir -p ~/.config/custos && cp config/config.example.toml ~/.config/custos/config.toml
+cp config/custos.example.md ~/.config/custos/custos.md
 ```
 
 Lancer et gérer la mascotte :
@@ -77,6 +78,11 @@ ouvre la conversation complète en grand : Claude Code dans un terminal, avec
 `claude --resume`. Un clic en dehors de la carte, Échap ou ✕ la ferment (et arrêtent une
 réponse en cours).
 
+Custos détecte ta machine (distribution, Hyprland, terminal, shell, caelestia, yay…) pour
+te donner des commandes qui s'y appliquent. Son caractère, et ce qu'il doit savoir de toi,
+c'est toi qui l'écris dans `~/.config/custos/custos.md` (voir `config/custos.example.md`) :
+le fichier est joint à chaque question, sans redémarrer.
+
 Custos remarque aussi, localement et sans appeler Claude, ce que tu pourrais vouloir lui
 montrer : un texte sélectionné (📋), une image copiée ou une capture `SUPER + SHIFT + S`
 de caelestia (🖼️). Un badge s'allume quelques secondes sur la mascotte ; un clic ouvre la
@@ -120,7 +126,8 @@ src/custos/
 ├── daemon.py       boucle principale
 ├── ipc.py          socket Unix entre les commandes et le daemon
 ├── claude.py       appels à `claude -p`
-├── config.py       lecture de ~/.config/custos/config.toml
+├── config.py       lecture de ~/.config/custos/config.toml et custos.md
+├── machine.py      détection de la machine (distribution, terminal, shell…)
 ├── states.py       états de la mascotte
 ├── watch.py        surveillance de la sélection, du presse-papier et des captures
 ├── context/        fenêtre active, sélection, capture, filtrage des secrets

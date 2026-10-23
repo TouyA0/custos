@@ -23,3 +23,14 @@ def test_partial_file_keeps_other_defaults(tmp_path: Path) -> None:
     assert cfg.mascot.size == 128
     assert cfg.mascot.margin == 24
     assert cfg.claude.timeout == 120
+
+
+def test_persona_without_comments_and_capped(tmp_path: Path) -> None:
+    from custos.config import MAX_PERSONA, load_persona
+
+    path = tmp_path / "custos.md"
+    assert load_persona(path) == ""
+    path.write_text("<!-- explication\nsur deux lignes -->\nTu tutoies.\n")
+    assert load_persona(path) == "Tu tutoies."
+    path.write_text("x" * (MAX_PERSONA + 50))
+    assert len(load_persona(path)) == MAX_PERSONA

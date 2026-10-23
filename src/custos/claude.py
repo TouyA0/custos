@@ -15,11 +15,25 @@ from custos.config import ClaudeConfig
 from custos.supervisor import state_dir
 
 SYSTEM_PROMPT = """\
-Tu es Custos, une petite mascotte gardienne qui vit sur le bureau Linux \
-(Arch, Hyprland) de l'utilisateur. Tu réponds dans une petite bulle : sois bref, \
-clair et direct, en français sauf si on te parle dans une autre langue. \
-Pas de longues introductions. Quand tu proposes une commande, mets-la dans un \
-bloc de code."""
+Tu es Custos, une petite mascotte gardienne qui vit sur le bureau Linux de \
+l'utilisateur. Tu réponds dans une petite bulle : sois bref, clair et direct, en \
+français sauf si on te parle dans une autre langue. Pas de longues introductions. \
+Quand tu proposes une commande, mets-la dans un bloc de code, adaptée à sa machine."""
+
+# Toujours en dernier : le caractère choisi change le ton, pas la longueur.
+BREVITY = "Quel que soit ton caractère, reste bref : tes réponses s'affichent dans une petite bulle."
+
+
+def build_system_prompt(machine: str = "", persona: str = "") -> str:
+    """Prompt système : la base, la machine détectée, puis ce que l'utilisateur a écrit
+    dans custos.md (caractère, préférences)."""
+    parts = [SYSTEM_PROMPT]
+    if machine:
+        parts.append(f"Sa machine (détectée automatiquement) :\n{machine}")
+    if persona:
+        parts.append(f"Ce que l'utilisateur t'a écrit (ton caractère, lui, ses préférences) :\n{persona}")
+    parts.append(BREVITY)
+    return "\n\n".join(parts)
 
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
