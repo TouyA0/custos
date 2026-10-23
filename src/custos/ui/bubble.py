@@ -152,7 +152,7 @@ class Bubble:
     def visible(self) -> bool:
         return self.window.get_visible()
 
-    def open_prompt(self, summary: str) -> None:
+    def open_prompt(self, summary: str, hint: str) -> None:
         """Nouvelle conversation : bulle vide, champ de saisie prêt."""
         self.exchanges = []
         self.thinking = False
@@ -162,11 +162,7 @@ class Bubble:
         self.copy_button.set_visible(False)
         self.entry.set_sensitive(True)
         self.entry.set_text("")
-        self.entry.set_placeholder_text(
-            "Demande à Custos… (Entrée vide : aide sur la sélection)"
-            if "sélection" in summary
-            else "Demande à Custos…"
-        )
+        self.entry.set_placeholder_text(hint)
         self._set_keyboard(True)
         self.window.present()
         self.entry.grab_focus()

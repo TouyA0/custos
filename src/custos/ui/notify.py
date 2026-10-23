@@ -45,7 +45,7 @@ class NotifyUI:
         if message:
             self._notification = notify("Custos", message, self._notification)
 
-    def open_prompt(self, summary: str) -> None:
+    def open_prompt(self, summary: str, hint: str) -> None:
         # Pas de bulle de saisie sans overlay.
         self.show_error('Pose ta question : custos ask "…"')
 

@@ -15,7 +15,7 @@ WINDOW = ActiveWindow("foot", "~", 0, 0, 100, 100)
 class FakeUI:
     def __init__(self) -> None:
         self.states: list[MascotState] = []
-        self.prompts: list[str] = []
+        self.prompts: list[tuple[str, str]] = []
         self.questions: list[str] = []
         self.chunks: list[str] = []
         self.answers: list[str] = []
@@ -24,8 +24,8 @@ class FakeUI:
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
 
-    def open_prompt(self, summary: str) -> None:
-        self.prompts.append(summary)
+    def open_prompt(self, summary: str, hint: str) -> None:
+        self.prompts.append((summary, hint))
 
     def start_answer(self, question: str) -> None:
         self.questions.append(question)
@@ -76,7 +76,7 @@ def test_question_from_cli_streams_answer(monkeypatch, ui, prompts) -> None:
 def test_shortcut_without_question_opens_prompt(monkeypatch, ui, prompts) -> None:
     use_context(monkeypatch, Context(window=WINDOW, selection="ls -la"))
     daemon.Daemon(Config(), ui).handle({"type": "ask", "selection": True})
-    assert ui.prompts == ["foot · sélection : 6 car."]
+    assert ui.prompts == [("foot · sélection : 6 car.", "Entrée : aide sur la sélection")]
     assert prompts == []
 
 
@@ -206,6 +206,70 @@ def test_failed_command_worries_without_calling_claude(ui, prompts) -> None:
     assert ui.states == [MascotState.WORRIED]
     assert d.last_failure == event
     assert prompts == []
+
+
+@pytest.mark.parametrize("exit_code", [130, 148])
+def test_interrupted_command_is_not_a_failure(ui, exit_code) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "shell-event", "exit_code": exit_code, "command": "sleep 100"})
+    assert ui.states == []
+    assert d.last_failure is None
+
+
+@pytest.fixture
+def collected(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Remplace la collecte du contexte et note ses arguments."""
+    calls: list[dict] = []
+
+    def fake_collect(privacy, selection=False, screenshot=False, failure=None):
+        calls.append({"screenshot": screenshot, "failure": failure})
+        return Context(window=WINDOW, failure=failure)
+
+    monkeypatch.setattr(context, "collect", fake_collect)
+    return calls
+
+
+FAILURE = {"type": "shell-event", "exit_code": 127, "command": "pacmna -Syu", "cwd": "/home/q"}
+
+
+def test_click_after_failure_offers_to_explain(ui, prompts, collected) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(FAILURE)
+    d.open_from_mascot()
+    assert collected == [{"screenshot": True, "failure": FAILURE}]
+    assert ui.prompts == [("échec : pacmna -Syu (code 127)", "Entrée : pourquoi ça a échoué ?")]
+
+    d.answer("")  # Entrée sans rien écrire
+    prompt = prompts[0][0]
+    assert "code de sortie 127, dossier /home/q" in prompt
+    assert "```\npacmna -Syu\n```" in prompt
+    assert prompt.endswith(f"Question : {context.FAILURE_QUESTION}")
+
+
+def test_failure_is_offered_only_once(ui, collected) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(FAILURE)
+    d.open_from_mascot()
+    d.open_from_mascot()
+    assert [c["failure"] for c in collected] == [FAILURE, None]
+    assert collected[1]["screenshot"] is False
+
+
+def test_old_failure_is_forgotten(monkeypatch, ui, collected) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(FAILURE)
+    later = daemon.time.monotonic() + daemon.RECENT_FAILURE + 1
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: later)
+    d.open_from_mascot()
+    assert collected[0]["failure"] is None
+    assert ui.prompts[0][1] == "Demande à Custos…"
+
+
+def test_failure_summary_hides_secrets(ui, collected) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle({**FAILURE, "command": "curl --token abcdef123456 x"})
+    d.open_from_mascot()
+    assert "abcdef123456" not in ui.prompts[0][0]
 
 
 def test_successful_command_is_ignored(ui) -> None:

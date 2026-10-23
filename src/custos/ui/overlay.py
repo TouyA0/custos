@@ -202,7 +202,7 @@ class OverlayUI:
         self.app.on_close = daemon.close_session
         # Le clic arrive dans le thread GTK ; lire le contexte appelle hyprctl et wl-paste.
         self.app.on_open = lambda: threading.Thread(
-            target=daemon.ask, args=({"type": "ask"},), daemon=True
+            target=daemon.open_from_mascot, daemon=True
         ).start()
 
     def _on_gtk_thread(self, action: Callable[[MascotOverlay], None]) -> None:
@@ -216,8 +216,8 @@ class OverlayUI:
     def set_state(self, state: MascotState) -> None:
         self._on_gtk_thread(lambda overlay: overlay.set_state(state))
 
-    def open_prompt(self, summary: str) -> None:
-        self._on_gtk_thread(lambda overlay: overlay.bubble.open_prompt(summary))
+    def open_prompt(self, summary: str, hint: str) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.open_prompt(summary, hint))
 
     def start_answer(self, question: str) -> None:
         self._on_gtk_thread(lambda overlay: overlay.bubble.start_answer(question))

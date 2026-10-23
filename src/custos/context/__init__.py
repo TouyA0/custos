@@ -10,6 +10,7 @@ from custos.context.hyprland import ActiveWindow
 MAX_SELECTION = 20_000  # caractères
 
 DEFAULT_QUESTION = "Aide-moi avec ce texte : explique-le, ou corrige-le si c'est moi qui l'ai écrit."
+FAILURE_QUESTION = "Pourquoi cette commande a échoué, et comment la corriger ?"
 
 
 @dataclass
@@ -18,6 +19,7 @@ class Context:
     selection: str = ""
     screenshot: Path | None = None
     blocked: bool = False  # fenêtre active dans la liste noire : rien n'a été lu
+    failure: dict | None = None  # commande shell en échec (message du hook)
 
     def cleanup(self) -> None:
         if self.screenshot:
@@ -25,12 +27,17 @@ class Context:
             self.screenshot = None
 
 
-def collect(config: PrivacyConfig, selection: bool = False, screenshot: bool = False) -> Context:
+def collect(
+    config: PrivacyConfig,
+    selection: bool = False,
+    screenshot: bool = False,
+    failure: dict | None = None,
+) -> Context:
     window = hyprland.active_window()
     if window and privacy.is_blocked(window.window_class, config.blocked_classes):
         return Context(window=window, blocked=True)
 
-    context = Context(window=window)
+    context = Context(window=window, failure=failure)
     if selection:
         text = clipboard.selection()
         if len(text) > MAX_SELECTION:
@@ -44,7 +51,10 @@ def collect(config: PrivacyConfig, selection: bool = False, screenshot: bool = F
 def describe(context: Context) -> str:
     """Résumé court de ce que Custos a lu, affiché en haut de la bulle."""
     parts = []
-    if context.window:
+    if context.failure:
+        command = _short(privacy.redact_secrets(context.failure.get("command", "")))
+        parts.append(f"échec : {command} (code {context.failure.get('exit_code')})")
+    elif context.window:
         parts.append(context.window.window_class)
     if context.selection:
         parts.append(f"sélection : {len(context.selection)} car.")
@@ -53,8 +63,26 @@ def describe(context: Context) -> str:
     return " · ".join(parts)
 
 
+def _short(text: str, limit: int = 40) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def hint(context: Context) -> str:
+    """Texte du champ de saisie vide : ce que fera Entrée sans rien écrire."""
+    if context.failure:
+        return "Entrée : pourquoi ça a échoué ?"
+    if context.selection:
+        return "Entrée : aide sur la sélection"
+    if context.screenshot:
+        return "Entrée : que vois-tu ?"
+    return "Demande à Custos…"
+
+
 def default_question(context: Context) -> str | None:
     """Question utilisée quand on valide la bulle sans rien écrire."""
+    if context.failure:
+        return FAILURE_QUESTION
     if context.selection:
         return DEFAULT_QUESTION
     if context.screenshot:
@@ -74,6 +102,13 @@ def build_prompt(
     if context.window and not context.blocked:
         title = privacy.redact_secrets(context.window.title)
         parts.append(f"Fenêtre active : {context.window.window_class} — « {title} »")
+    if context.failure:
+        command = privacy.redact_secrets(context.failure.get("command", ""))
+        cwd = context.failure.get("cwd") or "?"
+        parts.append(
+            f"Cette commande vient d'échouer (code de sortie {context.failure.get('exit_code')}, "
+            f"dossier {cwd}) :\n```\n{command}\n```"
+        )
     if context.screenshot:
         parts.append("Une capture de cette fenêtre est jointe.")
     if context.selection:

@@ -19,10 +19,13 @@ log = logging.getLogger(__name__)
 
 LAYER_SHELL_LIB = Path("/usr/lib/libgtk4-layer-shell.so")
 
+RECENT_FAILURE = 30.0  # secondes : même durée que l'inquiétude de la mascotte
+IGNORED_EXIT_CODES = {130, 148}  # Ctrl+C et Ctrl+Z : interrompre n'est pas une erreur
+
 
 class UI(Protocol):
     def set_state(self, state: MascotState) -> None: ...
-    def open_prompt(self, summary: str) -> None: ...
+    def open_prompt(self, summary: str, hint: str) -> None: ...
     def start_answer(self, question: str) -> None: ...
     def append_answer(self, text: str) -> None: ...
     def end_answer(self, answer: str) -> None: ...
@@ -43,6 +46,7 @@ class Daemon:
         self.ui = ui
         self.session: Session | None = None
         self.last_failure: dict | None = None  # dernière commande shell en échec
+        self._failure_at = 0.0
         self._busy = threading.Lock()  # une seule question à Claude à la fois
 
     def handle(self, message: dict) -> None:
@@ -63,6 +67,7 @@ class Daemon:
             self.config.privacy,
             selection=bool(message.get("selection")),
             screenshot=bool(message.get("screen")),
+            failure=message.get("failure"),
         )
         if ctx.blocked:
             self.ui.show_error("Cette fenêtre est protégée : je n'ai rien lu.")
@@ -73,7 +78,16 @@ class Daemon:
         if message.get("question"):
             self.answer(message["question"])
         else:
-            self.ui.open_prompt(context.describe(ctx))
+            self.ui.open_prompt(context.describe(ctx), context.hint(ctx))
+
+    def open_from_mascot(self) -> None:
+        """Clic sur la mascotte : si une commande vient d'échouer, la bulle propose de l'expliquer."""
+        failure = None
+        if self.last_failure and time.monotonic() - self._failure_at < RECENT_FAILURE:
+            failure = self.last_failure
+        self.last_failure = None
+        # La fenêtre active est sans doute le terminal : sa capture montre le message d'erreur.
+        self.ask({"type": "ask", "screen": failure is not None, "failure": failure})
 
     def submit(self, question: str) -> None:
         """Question tapée dans la bulle (thread GTK) : on répond dans un autre thread."""
@@ -127,9 +141,11 @@ class Daemon:
 
     def shell_event(self, message: dict) -> None:
         # Réaction locale uniquement : Claude n'est pas appelé ici.
-        if message.get("exit_code", 0) == 0 or not self.config.shell.react_on_failure:
+        exit_code = message.get("exit_code", 0)
+        if exit_code == 0 or exit_code in IGNORED_EXIT_CODES or not self.config.shell.react_on_failure:
             return
         self.last_failure = message
+        self._failure_at = time.monotonic()
         log.info("commande en échec (code %s)", message.get("exit_code"))
         self.ui.set_state(MascotState.WORRIED)
 
