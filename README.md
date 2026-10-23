@@ -41,8 +41,26 @@ Un clic sur la mascotte (ou `custos ask`) ouvre la bulle : tape ta question, Ent
 et la réponse s'affiche au fil de l'eau. Tu peux enchaîner avec une question de suivi ;
 Échap ou ✕ ferme la bulle et termine la conversation.
 
-Intégrations : `integrations/hyprland/custos.lua` (démarrage et raccourcis) et
-`integrations/shell/custos.bash` (hook bash).
+## Intégration au bureau (Hyprland + caelestia + fish)
+
+```bash
+mkdir -p ~/.local/bin && ln -sfn "$PWD/.venv/bin/custos" ~/.local/bin/custos
+```
+
+À la fin de `~/.config/caelestia/hypr-user.lua` (démarrage avec Hyprland et `SUPER + G`) :
+
+```lua
+dofile(os.getenv("HOME") .. "/Documents/Projets/custos/integrations/hyprland/custos.lua")
+```
+
+Dans `~/.config/caelestia/user-config.fish` (commande dans le PATH et hook des commandes en échec) :
+
+```fish
+fish_add_path -g ~/.local/bin
+source ~/Documents/Projets/custos/integrations/shell/custos.fish
+```
+
+Puis `hyprctl reload`. Un hook bash existe aussi : `integrations/shell/custos.bash`.
 
 ## Structure
 

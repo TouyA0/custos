@@ -1,11 +1,12 @@
--- Custos : à charger depuis ~/.config/hypr/hyprland.lua
--- (copier dans ~/.config/hypr/hyprland/custos.lua puis ajouter require("hyprland.custos")).
+-- Custos : démarrage et raccourcis.
+-- À charger depuis ~/.config/caelestia/hypr-user.lua :
+--   dofile(os.getenv("HOME") .. "/Documents/Projets/custos/integrations/hyprland/custos.lua")
+
+local custos = os.getenv("HOME") .. "/.local/bin/custos"
 
 hl.on("hyprland.start", function()
-    hl.exec_cmd("custos daemon")
+    hl.exec_cmd(custos .. " daemon")
 end)
 
--- Ouvrir la bulle pour poser une question
-hl.bind("SUPER + SHIFT + A", hl.dsp.exec_cmd("custos ask"))
--- Demander à Custos à propos du texte sélectionné
-hl.bind("SUPER + SHIFT + E", hl.dsp.exec_cmd("custos ask --selection"))
+-- Ouvrir la bulle au clavier (G comme gardien) ; sinon, un clic sur la mascotte.
+hl.bind("SUPER + G", hl.dsp.exec_cmd(custos .. " ask"))
