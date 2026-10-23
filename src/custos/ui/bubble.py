@@ -16,9 +16,9 @@ gi.require_version("Gtk4LayerShell", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango
 from gi.repository import Gtk4LayerShell as LayerShell
 
-from custos.config import MascotConfig
 from custos.context import clipboard
 from custos.ui import markdown
+from custos.ui.position import Placement
 
 WIDTH = 440
 MAX_HEIGHT = 380
@@ -67,8 +67,6 @@ class Bubble:
     def __init__(
         self,
         app: Gtk.Application,
-        config: MascotConfig,
-        mascot_height: int,
         on_submit: Callable[[str], None],
         on_close: Callable[[], None],
     ) -> None:
@@ -83,17 +81,8 @@ class Bubble:
         LayerShell.set_namespace(self.window, "custos-bubble")
         LayerShell.set_layer(self.window, LayerShell.Layer.OVERLAY)
         self._set_keyboard(False)
-        vertical, horizontal = config.position.split("-")
-        edges = {
-            "top": LayerShell.Edge.TOP,
-            "bottom": LayerShell.Edge.BOTTOM,
-            "left": LayerShell.Edge.LEFT,
-            "right": LayerShell.Edge.RIGHT,
-        }
-        LayerShell.set_anchor(self.window, edges[vertical], True)
-        LayerShell.set_anchor(self.window, edges[horizontal], True)
-        LayerShell.set_margin(self.window, edges[vertical], config.margin + mascot_height)
-        LayerShell.set_margin(self.window, edges[horizontal], config.margin)
+        LayerShell.set_exclusive_zone(self.window, -1)  # coordonnées de l'écran entier
+        LayerShell.set_anchor(self.window, LayerShell.Edge.LEFT, True)
 
         self._build()
 
@@ -147,6 +136,15 @@ class Bubble:
         self.window.set_child(box)
 
     # --- API utilisée par la mascotte --------------------------------------
+
+    def place(self, placement: Placement) -> None:
+        """Positionne la bulle à côté de la mascotte (voir position.bubble_placement)."""
+        top = placement.edge == "top"
+        LayerShell.set_anchor(self.window, LayerShell.Edge.TOP, top)
+        LayerShell.set_anchor(self.window, LayerShell.Edge.BOTTOM, not top)
+        LayerShell.set_margin(self.window, LayerShell.Edge.LEFT, placement.left)
+        edge = LayerShell.Edge.TOP if top else LayerShell.Edge.BOTTOM
+        LayerShell.set_margin(self.window, edge, placement.margin)
 
     @property
     def visible(self) -> bool:

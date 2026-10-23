@@ -25,9 +25,12 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gsk, Gtk, Pango
 from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.config import MascotConfig
+from custos.context import hyprland
 from custos.states import MascotState
+from custos.ui import position
 from custos.ui.animation import BLINK_SPRITE, SPRITES, Animator
 from custos.ui.bubble import CSS as BUBBLE_CSS
+from custos.ui.bubble import WIDTH as BUBBLE_WIDTH
 from custos.ui.bubble import Bubble
 
 APP_ID = "io.github.touya0.Custos"
@@ -42,15 +45,10 @@ BADGE_FILL = Gdk.RGBA(red=0.937, green=0.914, blue=0.875, alpha=1.0)  # crème #
 BADGE_BORDER = Gdk.RGBA(red=0.122, green=0.176, blue=0.310, alpha=1.0)  # marine #1f2d4f
 BADGE_ICONS = {"selection": "📋", "clipboard-image": "🖼\ufe0f", "screenshot": "🖼\ufe0f"}
 
+DRAG_THRESHOLD = 6  # pixels : en dessous, c'est un clic
+FALLBACK_SCREEN = (1920, 1080)  # si Hyprland ne répond pas
+
 DEFAULT_SPRITES = Path(__file__).resolve().parents[3] / "assets" / "sprites"
-
-EDGES = {
-    "top": LayerShell.Edge.TOP,
-    "bottom": LayerShell.Edge.BOTTOM,
-    "left": LayerShell.Edge.LEFT,
-    "right": LayerShell.Edge.RIGHT,
-}
-
 
 def is_supported() -> bool:
     return LayerShell.is_supported()
@@ -186,23 +184,40 @@ class MascotOverlay:
         LayerShell.set_namespace(self.window, "custos")
         LayerShell.set_layer(self.window, LayerShell.Layer.OVERLAY)
         LayerShell.set_keyboard_mode(self.window, LayerShell.KeyboardMode.NONE)
-        for edge in config.position.split("-"):
-            LayerShell.set_anchor(self.window, EDGES[edge], True)
-            LayerShell.set_margin(self.window, EDGES[edge], config.margin)
+        # Toujours ancrée en haut à gauche : les marges sont sa position à l'écran.
+        # Zone exclusive -1 : marges comptées depuis le bord de l'écran, pas depuis la
+        # zone laissée libre par la barre caelestia.
+        LayerShell.set_exclusive_zone(self.window, -1)
+        LayerShell.set_anchor(self.window, LayerShell.Edge.TOP, True)
+        LayerShell.set_anchor(self.window, LayerShell.Edge.LEFT, True)
 
         scale = self.window.get_scale_factor()
         sprites = load_sprites(folder, config.size * scale, config.outline)
         self.widget = MascotWidget(config, sprites, self.animator)
         self.bubble = Bubble(
             app,
-            config,
-            mascot_height=round(config.size * (1 + 2 * PADDING)),
             on_submit=lambda question: app.on_submit(question),
             on_close=lambda: app.on_close(),
         )
+
+        self.canvas = round(config.size * (1 + 2 * PADDING))
+        monitor = hyprland.focused_monitor()
+        self.screen = (monitor.width, monitor.height) if monitor else FALLBACK_SCREEN
+        x, y = position.load() or position.default_position(
+            config.position, config.margin, self.canvas, *self.screen
+        )
+        self.move_to(x, y)
+
         click = Gtk.GestureClick()
         click.connect("released", self._on_click)
         self.widget.add_controller(click)
+        drag = Gtk.GestureDrag()
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        drag.connect("drag-end", self._on_drag_end)
+        self.widget.add_controller(drag)
+        self._drag_start: tuple[tuple[int, int], tuple[int, int]] | None = None
+        self._dragged = False
         self.window.set_child(self.widget)
 
         css = Gtk.CssProvider()
@@ -218,7 +233,41 @@ class MascotOverlay:
     def set_state(self, state: MascotState) -> None:
         self.animator.set_state(state, time.monotonic())
 
+    def move_to(self, x: int, y: int) -> None:
+        self.x, self.y = position.clamp(x, y, self.canvas, *self.screen)
+        LayerShell.set_margin(self.window, LayerShell.Edge.LEFT, self.x)
+        LayerShell.set_margin(self.window, LayerShell.Edge.TOP, self.y)
+        self.bubble.place(
+            position.bubble_placement(self.x, self.y, self.canvas, BUBBLE_WIDTH, *self.screen)
+        )
+
+    # Glisser-déposer : on suit le curseur global (socket Hyprland) plutôt que les
+    # coordonnées du geste, qui bougent avec la fenêtre qu'on est en train de déplacer.
+
+    def _on_drag_begin(self, *_args) -> None:
+        cursor = hyprland.cursor_position()
+        self._drag_start = (cursor, (self.x, self.y)) if cursor else None
+        self._dragged = False
+
+    def _on_drag_update(self, *_args) -> None:
+        cursor = hyprland.cursor_position()
+        if not self._drag_start or not cursor:
+            return
+        (cx, cy), (x, y) = self._drag_start
+        dx, dy = cursor[0] - cx, cursor[1] - cy
+        if not self._dragged and abs(dx) + abs(dy) < DRAG_THRESHOLD:
+            return  # simple clic, pas un déplacement
+        self._dragged = True
+        self.move_to(x + dx, y + dy)
+
+    def _on_drag_end(self, *_args) -> None:
+        if self._drag_start and (self.x, self.y) != self._drag_start[1]:
+            position.save(self.x, self.y)
+        self._drag_start = None
+
     def _on_click(self, *_args) -> None:
+        if self._dragged:
+            return  # fin d'un déplacement, pas un clic
         # Un clic ouvre la bulle (ou la ferme si elle est déjà ouverte).
         if self.bubble.visible:
             self.bubble.close()

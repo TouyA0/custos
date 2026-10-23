@@ -43,6 +43,9 @@ custos logs -f    # suit le log : ~/.local/state/custos/custos.log
 jusqu'à 5 fois par minute. Le log ne contient jamais le contenu de tes questions,
 sélections ou commandes : seulement des événements, des tailles et des durées.
 
+Glisse la mascotte où tu veux : sa position est mémorisée (`~/.local/state/custos/position.json` ;
+supprime ce fichier puis `custos restart` pour revenir au coin choisi dans la config).
+
 Un clic sur la mascotte (ou `custos ask`) ouvre la bulle : tape ta question, Entrée,
 et la réponse s'affiche au fil de l'eau. Tu peux enchaîner avec une question de suivi ;
 Échap ou ✕ ferme la bulle et termine la conversation.
@@ -90,6 +93,7 @@ src/custos/
 └── ui/
     ├── overlay.py  la mascotte : fenêtre layer-shell GTK4, au-dessus de tout
     ├── bubble.py   bulle de dialogue : saisie, réponse en streaming, copie
+    ├── position.py position de la mascotte (glisser-déposer) et placement de la bulle
     ├── markdown.py Markdown des réponses → balisage Pango
     ├── animation.py  flottement, clignement, endormissement (sans GTK, testé)
     └── notify.py   notifications (réponses, et repli si l'overlay est impossible)
