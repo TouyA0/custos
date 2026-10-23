@@ -28,6 +28,15 @@ python -m venv --system-site-packages .venv
 mkdir -p ~/.config/custos && cp config/config.example.toml ~/.config/custos/config.toml
 ```
 
+Lancer la mascotte :
+
+```bash
+.venv/bin/custos daemon
+```
+
+Le daemon se relance tout seul avec `LD_PRELOAD=libgtk4-layer-shell.so`, nécessaire
+à gtk4-layer-shell depuis Python. Un clic sur la mascotte la réveille ou la calme.
+
 Intégrations : `integrations/hyprland/custos.lua` (démarrage et raccourcis) et
 `integrations/shell/custos.bash` (hook bash).
 
@@ -42,8 +51,12 @@ src/custos/
 ├── config.py       lecture de ~/.config/custos/config.toml
 ├── states.py       états de la mascotte
 ├── context/        fenêtre active, sélection, capture, filtrage des secrets
-└── ui/             overlay de la mascotte et bulle de dialogue
-assets/sprites/     animations, un dossier par état
+└── ui/
+    ├── overlay.py  la mascotte : fenêtre layer-shell GTK4, au-dessus de tout
+    ├── animation.py  flottement, clignement, endormissement (sans GTK, testé)
+    └── notify.py   notifications (réponses, et repli si l'overlay est impossible)
+assets/sprites/     images de la mascotte, un dossier par état
+scripts/            préparation des sprites
 integrations/       snippets Hyprland (Lua) et bash
 tests/
 ```

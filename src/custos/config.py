@@ -22,6 +22,9 @@ class MascotConfig:
     position: str = "bottom-right"
     margin: int = 24
     size: int = 96
+    sleep_after: int = 300
+    outline: bool = True
+    sprites_dir: str = ""
 
 
 @dataclass

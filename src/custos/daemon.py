@@ -1,9 +1,12 @@
 """Daemon : affiche la mascotte, reçoit les messages et orchestre les appels à Claude."""
 
 import logging
+import os
 import signal
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Protocol
 
 from custos import claude, context, ipc
@@ -11,6 +14,8 @@ from custos.config import Config, load
 from custos.states import MascotState
 
 log = logging.getLogger(__name__)
+
+LAYER_SHELL_LIB = Path("/usr/lib/libgtk4-layer-shell.so")
 
 
 class UI(Protocol):
@@ -70,6 +75,7 @@ class Daemon:
             self.ui.show_answer(answer.strip())
         except claude.ClaudeError as exc:
             log.warning("erreur Claude : %s", exc)
+            self.ui.set_state(MascotState.IDLE)
             self.ui.show_error(str(exc))
         finally:
             if ctx:
@@ -85,25 +91,76 @@ class Daemon:
         self.ui.set_state(MascotState.WORRIED)
 
 
-def run() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s custos %(levelname)s %(message)s")
-    from custos.ui.notify import NotifyUI
+def _preload_layer_shell() -> None:
+    """gtk4-layer-shell doit être chargé avant libwayland : on se relance avec LD_PRELOAD."""
+    preload = os.environ.get("LD_PRELOAD", "")
+    if "libgtk4-layer-shell" in preload or not LAYER_SHELL_LIB.exists():
+        return
+    env = dict(os.environ, LD_PRELOAD=f"{LAYER_SHELL_LIB} {preload}".strip())
+    os.execve(sys.executable, [sys.executable, "-m", "custos", "daemon"], env)
 
-    daemon = Daemon(load(), NotifyUI())
+
+def _gtk_app(config: Config):
+    """Application GTK de la mascotte, ou None si l'overlay est impossible (pas de layer-shell…)."""
     try:
-        server = ipc.Server(daemon.handle)
+        from custos.ui import overlay
+    except (ImportError, ValueError) as exc:
+        log.warning("mascotte indisponible (%s) : réponses par notification", exc)
+        return None
+    if not overlay.is_supported():
+        log.warning("le compositeur ne gère pas layer-shell : réponses par notification")
+        return None
+    return overlay.MascotApp(config.mascot)
+
+
+def run() -> int:
+    _preload_layer_shell()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s custos %(levelname)s %(message)s")
+    config = load()
+
+    handler: list = []  # rempli une fois le daemon créé
+    try:
+        server = ipc.Server(lambda message: handler[0](message))
     except ipc.DaemonAlreadyRunning:
         log.error("un daemon Custos tourne déjà")
         return 1
-
-    # SIGTERM (fin de session Hyprland) arrête proprement, comme Ctrl+C.
-    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown).start())
     log.info("à l'écoute sur %s", server.path)
+
+    app = _gtk_app(config)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+        if app is None:
+            from custos.ui.notify import NotifyUI
+
+            handler.append(Daemon(config, NotifyUI()).handle)
+            _serve_headless(server)
+        else:
+            from custos.ui.overlay import OverlayUI
+
+            handler.append(Daemon(config, OverlayUI(app)).handle)
+            _serve_with_gtk(server, app)
     finally:
         server.server_close()
         log.info("arrêté")
     return 0
+
+
+def _serve_headless(server: ipc.Server) -> None:
+    # SIGTERM (fin de session Hyprland) arrête proprement, comme Ctrl+C.
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown).start())
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+def _serve_with_gtk(server: ipc.Server, app) -> None:
+    from gi.repository import GLib
+
+    # GTK occupe le thread principal ; le serveur IPC tourne à côté.
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda: app.quit() or GLib.SOURCE_REMOVE)
+    try:
+        app.run([])
+    finally:
+        server.shutdown()

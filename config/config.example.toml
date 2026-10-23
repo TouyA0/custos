@@ -10,6 +10,9 @@ timeout = 120  # secondes
 position = "bottom-right"
 margin = 24  # pixels depuis le bord de l'écran
 size = 96    # taille du sprite en pixels
+sleep_after = 300  # secondes sans activité avant qu'elle s'endorme
+outline = true     # halo clair autour d'elle, pour la voir sur un fond sombre
+# sprites_dir = "~/mes-sprites"  # par défaut : assets/sprites du projet
 
 [privacy]
 # Classes Hyprland (`hyprctl activewindow -j`) dont Custos ne lit jamais le contenu.

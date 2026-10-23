@@ -50,5 +50,4 @@ class NotifyUI:
         self._notification = notify("Custos", text, self._notification)
 
     def show_error(self, text: str) -> None:
-        self.state = MascotState.IDLE
         self._notification = notify("Custos — oups", text, self._notification)
