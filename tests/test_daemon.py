@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from custos import claude, cli, context, daemon
+from custos import claude, cli, context, daemon, watch
 from custos.config import Config
 from custos.context import Context
 from custos.context.hyprland import ActiveWindow
@@ -20,6 +20,7 @@ class FakeUI:
         self.chunks: list[str] = []
         self.answers: list[str] = []
         self.errors: list[str] = []
+        self.notices: list[str | None] = []
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
@@ -38,6 +39,9 @@ class FakeUI:
 
     def show_error(self, text: str) -> None:
         self.errors.append(text)
+
+    def show_notice(self, kind: str | None) -> None:
+        self.notices.append(kind)
 
 
 @pytest.fixture
@@ -221,9 +225,17 @@ def collected(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     """Remplace la collecte du contexte et note ses arguments."""
     calls: list[dict] = []
 
-    def fake_collect(privacy, selection=False, screenshot=False, failure=None):
-        calls.append({"screenshot": screenshot, "failure": failure})
-        return Context(window=WINDOW, failure=failure)
+    def fake_collect(privacy, selection=False, screenshot=False, failure=None, image=None, image_kind="window"):
+        calls.append(
+            {"selection": selection, "screenshot": screenshot, "failure": failure, "image": image}
+        )
+        return Context(
+            window=WINDOW,
+            failure=failure,
+            selection="du texte" if selection else "",
+            screenshot=image,
+            image_kind=image_kind,
+        )
 
     monkeypatch.setattr(context, "collect", fake_collect)
     return calls
@@ -236,7 +248,7 @@ def test_click_after_failure_offers_to_explain(ui, prompts, collected) -> None:
     d = daemon.Daemon(Config(), ui)
     d.handle(FAILURE)
     d.open_from_mascot()
-    assert collected == [{"screenshot": True, "failure": FAILURE}]
+    assert collected == [{"selection": False, "screenshot": True, "failure": FAILURE, "image": None}]
     assert ui.prompts == [("échec : pacmna -Syu (code 127)", "Entrée : pourquoi ça a échoué ?")]
 
     d.answer("")  # Entrée sans rien écrire
@@ -270,6 +282,103 @@ def test_failure_summary_hides_secrets(ui, collected) -> None:
     d.handle({**FAILURE, "command": "curl --token abcdef123456 x"})
     d.open_from_mascot()
     assert "abcdef123456" not in ui.prompts[0][0]
+
+
+@pytest.fixture
+def desktop(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Fenêtre active et sélection simulées pour les événements de surveillance."""
+    state = {"window": WINDOW, "selection": "une phrase sélectionnée"}
+    monkeypatch.setattr(daemon.hyprland, "active_window", lambda: state["window"])
+    monkeypatch.setattr(daemon.clipboard, "selection", lambda: state["selection"])
+    return state
+
+
+def test_selection_lights_badge_then_click_uses_it(ui, collected, desktop) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.on_watch_event(watch.SELECTION)
+    assert ui.notices == [watch.SELECTION]
+    d.open_from_mascot()
+    assert ui.notices == [watch.SELECTION, None]  # badge éteint au clic
+    assert collected[0]["selection"] is True
+    assert ui.prompts[0][1] == "Entrée : aide sur la sélection"
+
+
+def test_same_or_tiny_selection_is_ignored(ui, desktop) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.on_watch_event(watch.SELECTION)
+    d.on_watch_event(watch.SELECTION)  # même texte
+    desktop["selection"] = " a "
+    d.on_watch_event(watch.SELECTION)
+    assert ui.notices == [watch.SELECTION]
+
+
+def test_nothing_noticed_in_blocked_window(ui, desktop) -> None:
+    config = Config()
+    config.privacy.blocked_classes = ["foot"]
+    d = daemon.Daemon(config, ui)
+    d.on_watch_event(watch.SELECTION)
+    d.on_watch_event(watch.CLIPBOARD_IMAGE)
+    assert ui.notices == []
+
+
+def test_nothing_noticed_while_bubble_is_open(monkeypatch, ui, collected, desktop) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})  # bulle ouverte
+    d.on_watch_event(watch.SELECTION)
+    assert ui.notices == []
+    d.close_session()
+    d.on_watch_event(watch.SELECTION)
+    assert ui.notices == [watch.SELECTION]
+
+
+def test_old_notice_is_ignored(monkeypatch, ui, collected, desktop) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.on_watch_event(watch.SELECTION)
+    later = daemon.time.monotonic() + Config().notice.duration + 1
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: later)
+    d.open_from_mascot()
+    assert collected[0]["selection"] is False
+
+
+def test_caelestia_screenshot_is_copied_not_moved(ui, collected, desktop, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    original = tmp_path / "caelestia-picker-1.png"
+    original.write_bytes(b"png")
+    d = daemon.Daemon(Config(), ui)
+    d.on_watch_event(watch.SCREENSHOT, str(original))
+    d.open_from_mascot()
+    sent = collected[0]["image"]
+    assert sent != original and sent.read_bytes() == b"png"
+    assert ui.prompts[0][0] == "foot · capture d'écran"
+    d.close_session()
+    assert original.exists() and not sent.exists()
+
+
+def test_clipboard_image(ui, collected, desktop, tmp_path, monkeypatch) -> None:
+    image = tmp_path / "custos-x.png"
+    image.write_bytes(b"png")
+    monkeypatch.setattr(daemon.clipboard, "image_to_file", lambda: image)
+    d = daemon.Daemon(Config(), ui)
+    d.on_watch_event(watch.CLIPBOARD_IMAGE)
+    d.open_from_mascot()
+    assert collected[0]["image"] == image
+    assert ui.prompts[0] == ("foot · image copiée", "Entrée : que vois-tu ?")
+
+
+def test_vanished_image_shows_error(ui, collected, desktop) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.on_watch_event(watch.SCREENSHOT, "/tmp/n-existe-pas.png")
+    d.open_from_mascot()
+    assert collected == []
+    assert ui.errors
+
+
+def test_failure_has_priority_over_notice(ui, collected, desktop) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.on_watch_event(watch.SELECTION)
+    d.handle(FAILURE)
+    d.open_from_mascot()
+    assert collected[0]["failure"] == FAILURE
 
 
 def test_successful_command_is_ignored(ui) -> None:

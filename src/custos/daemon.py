@@ -2,23 +2,26 @@
 
 import logging
 import os
+import shutil
 import signal
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from custos import claude, context, ipc
+from custos import claude, context, ipc, watch
 from custos.config import Config, load
-from custos.context import Context
+from custos.context import Context, clipboard, hyprland, privacy
 from custos.states import MascotState
 
 log = logging.getLogger(__name__)
 
 LAYER_SHELL_LIB = Path("/usr/lib/libgtk4-layer-shell.so")
 
+MIN_SELECTION = 3  # caractères : en dessous, ce n'est sans doute pas une vraie sélection
 RECENT_FAILURE = 30.0  # secondes : même durée que l'inquiétude de la mascotte
 IGNORED_EXIT_CODES = {130, 148}  # Ctrl+C et Ctrl+Z : interrompre n'est pas une erreur
 
@@ -30,6 +33,16 @@ class UI(Protocol):
     def append_answer(self, text: str) -> None: ...
     def end_answer(self, answer: str) -> None: ...
     def show_error(self, text: str) -> None: ...
+    def show_notice(self, kind: str | None) -> None: ...
+
+
+@dataclass
+class Notice:
+    """Quelque chose que Custos a remarqué (sélection, image) et propose d'analyser."""
+
+    kind: str  # voir watch.SELECTION, CLIPBOARD_IMAGE, SCREENSHOT
+    at: float
+    path: str | None = None  # fichier de la capture caelestia
 
 
 @dataclass
@@ -47,6 +60,8 @@ class Daemon:
         self.session: Session | None = None
         self.last_failure: dict | None = None  # dernière commande shell en échec
         self._failure_at = 0.0
+        self.notice: Notice | None = None
+        self._last_selection_hash: int | None = None
         self._busy = threading.Lock()  # une seule question à Claude à la fois
 
     def handle(self, message: dict) -> None:
@@ -63,11 +78,14 @@ class Daemon:
         if self._busy.locked():
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
             return
+        image = message.get("image")
         ctx = context.collect(
             self.config.privacy,
             selection=bool(message.get("selection")),
             screenshot=bool(message.get("screen")),
             failure=message.get("failure"),
+            image=Path(image) if image else None,
+            image_kind=message.get("image_kind", "window"),
         )
         if ctx.blocked:
             self.ui.show_error("Cette fenêtre est protégée : je n'ai rien lu.")
@@ -81,13 +99,65 @@ class Daemon:
             self.ui.open_prompt(context.describe(ctx), context.hint(ctx))
 
     def open_from_mascot(self) -> None:
-        """Clic sur la mascotte : si une commande vient d'échouer, la bulle propose de l'expliquer."""
-        failure = None
-        if self.last_failure and time.monotonic() - self._failure_at < RECENT_FAILURE:
-            failure = self.last_failure
+        """Clic sur la mascotte : propose d'abord ce qu'elle vient de remarquer.
+
+        Par ordre de priorité : une commande qui vient d'échouer, une sélection ou une
+        image remarquée, sinon une bulle vide.
+        """
+        now = time.monotonic()
+        failure = self.last_failure if now - self._failure_at < RECENT_FAILURE else None
+        notice = self.notice if self.notice and now - self.notice.at < self.config.notice.duration else None
         self.last_failure = None
-        # La fenêtre active est sans doute le terminal : sa capture montre le message d'erreur.
-        self.ask({"type": "ask", "screen": failure is not None, "failure": failure})
+        self._clear_notice()
+
+        if failure:
+            # La fenêtre active est sans doute le terminal : sa capture montre le message d'erreur.
+            self.ask({"type": "ask", "screen": True, "failure": failure})
+        elif notice and notice.kind == watch.SELECTION:
+            self.ask({"type": "ask", "selection": True})
+        elif notice:
+            image = self._copy_noticed_image(notice)
+            if image is None:
+                self.ui.show_error("Je n'arrive plus à lire cette image.")
+                return
+            kind = "screenshot" if notice.kind == watch.SCREENSHOT else "clipboard"
+            self.ask({"type": "ask", "image": str(image), "image_kind": kind})
+        else:
+            self.ask({"type": "ask"})
+
+    def on_watch_event(self, kind: str, path: str | None = None) -> None:
+        """Changement de sélection, image copiée ou capture : allume le badge (sans appeler Claude)."""
+        if self.session or self._busy.locked():
+            return  # bulle ouverte : on ne dérange pas (et sa propre sélection ne compte pas)
+        if kind != watch.SCREENSHOT:
+            window = hyprland.active_window()
+            if window and privacy.is_blocked(window.window_class, self.config.privacy.blocked_classes):
+                return
+        if kind == watch.SELECTION:
+            text = clipboard.selection().strip()
+            if len(text) < MIN_SELECTION or hash(text) == self._last_selection_hash:
+                return
+            self._last_selection_hash = hash(text)
+        self.notice = Notice(kind, time.monotonic(), path)
+        self.ui.show_notice(kind)
+
+    def _clear_notice(self) -> None:
+        if self.notice:
+            self.notice = None
+            self.ui.show_notice(None)
+
+    def _copy_noticed_image(self, notice: Notice) -> Path | None:
+        """Copie temporaire de l'image : la session la supprime après usage, pas l'original."""
+        if notice.kind == watch.CLIPBOARD_IMAGE:
+            return clipboard.image_to_file()
+        if notice.path and Path(notice.path).exists():
+            fd, name = tempfile.mkstemp(
+                prefix="custos-", suffix=".png", dir=os.environ.get("XDG_RUNTIME_DIR")
+            )
+            os.close(fd)
+            shutil.copyfile(notice.path, name)
+            return Path(name)
+        return None
 
     def submit(self, question: str) -> None:
         """Question tapée dans la bulle (thread GTK) : on répond dans un autre thread."""
@@ -186,24 +256,42 @@ def run() -> int:
     log.info("à l'écoute sur %s", server.path)
 
     app = _gtk_app(config)
+    watcher = None
     try:
         if app is None:
             from custos.ui.notify import NotifyUI
 
-            handler.append(Daemon(config, NotifyUI()).handle)
+            daemon = Daemon(config, NotifyUI())
+            handler.append(daemon.handle)
             _serve_headless(server)
         else:
             from custos.ui.overlay import OverlayUI
 
-            ui = OverlayUI(app)
+            ui = OverlayUI(app, config.notice.duration)
             daemon = Daemon(config, ui)
             ui.connect(daemon)
             handler.append(daemon.handle)
+            watcher = _start_watcher(config, daemon)
             _serve_with_gtk(server, app)
     finally:
+        if watcher:
+            watcher.stop()
         server.server_close()
         log.info("arrêté")
     return 0
+
+
+def _start_watcher(config: Config, daemon: Daemon) -> watch.Watcher:
+    # Seulement avec la mascotte : sans elle, pas de badge à allumer ni de clic possible.
+    notice = config.notice
+    watcher = watch.Watcher(
+        daemon.on_watch_event,
+        selection=notice.selection,
+        images=notice.images,
+        screenshot_glob=notice.screenshot_glob if notice.screenshots else "",
+    )
+    watcher.start()
+    return watcher
 
 
 def _serve_headless(server: ipc.Server) -> None:

@@ -41,6 +41,12 @@ Un clic sur la mascotte (ou `custos ask`) ouvre la bulle : tape ta question, Ent
 et la réponse s'affiche au fil de l'eau. Tu peux enchaîner avec une question de suivi ;
 Échap ou ✕ ferme la bulle et termine la conversation.
 
+Custos remarque aussi, localement et sans appeler Claude, ce que tu pourrais vouloir lui
+montrer : un texte sélectionné (📋), une image copiée ou une capture `SUPER + SHIFT + S`
+de caelestia (🖼️). Un badge s'allume quelques secondes sur la mascotte ; un clic ouvre la
+bulle avec ce contenu. Après une commande en échec, le clic propose plutôt de l'expliquer.
+Réglages dans la section `[notice]` de la config.
+
 ## Intégration au bureau (Hyprland + caelestia + fish)
 
 ```bash
@@ -72,6 +78,7 @@ src/custos/
 ├── claude.py       appels à `claude -p`
 ├── config.py       lecture de ~/.config/custos/config.toml
 ├── states.py       états de la mascotte
+├── watch.py        surveillance de la sélection, du presse-papier et des captures
 ├── context/        fenêtre active, sélection, capture, filtrage des secrets
 └── ui/
     ├── overlay.py  la mascotte : fenêtre layer-shell GTK4, au-dessus de tout

@@ -1,6 +1,9 @@
 """Texte sélectionné (`wl-paste --primary`) et presse-papier (`wl-paste`)."""
 
+import os
 import subprocess
+import tempfile
+from pathlib import Path
 
 
 def _paste(*args: str) -> str:
@@ -32,3 +35,19 @@ def copy(text: str) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return True
+
+
+def image_to_file() -> Path | None:
+    """Enregistre l'image du presse-papier dans un PNG temporaire (à supprimer après usage)."""
+    fd, name = tempfile.mkstemp(prefix="custos-", suffix=".png", dir=os.environ.get("XDG_RUNTIME_DIR"))
+    path = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            subprocess.run(["wl-paste", "--type", "image/png"], stdout=f, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError):
+        path.unlink(missing_ok=True)
+        return None
+    if path.stat().st_size == 0:
+        path.unlink()
+        return None
+    return path

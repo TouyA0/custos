@@ -38,11 +38,21 @@ class ShellConfig:
 
 
 @dataclass
+class NoticeConfig:
+    selection: bool = True
+    images: bool = True
+    screenshots: bool = True
+    screenshot_glob: str = "/tmp/caelestia-picker-*.png"
+    duration: int = 10
+
+
+@dataclass
 class Config:
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     mascot: MascotConfig = field(default_factory=MascotConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     shell: ShellConfig = field(default_factory=ShellConfig)
+    notice: NoticeConfig = field(default_factory=NoticeConfig)
 
 
 def load(path: Path | None = None) -> Config:
@@ -59,4 +69,5 @@ def load(path: Path | None = None) -> Config:
         mascot=MascotConfig(**data.get("mascot", {})),
         privacy=PrivacyConfig(**data.get("privacy", {})),
         shell=ShellConfig(**data.get("shell", {})),
+        notice=NoticeConfig(**data.get("notice", {})),
     )

@@ -60,3 +60,6 @@ class NotifyUI:
 
     def show_error(self, text: str) -> None:
         self._notification = notify("Custos — oups", text, self._notification)
+
+    def show_notice(self, kind: str | None) -> None:
+        pass  # pas de mascotte, pas de badge

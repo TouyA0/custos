@@ -20,6 +20,7 @@ class Context:
     screenshot: Path | None = None
     blocked: bool = False  # fenêtre active dans la liste noire : rien n'a été lu
     failure: dict | None = None  # commande shell en échec (message du hook)
+    image_kind: str = "window"  # d'où vient `screenshot` : window, clipboard ou screenshot
 
     def cleanup(self) -> None:
         if self.screenshot:
@@ -27,12 +28,22 @@ class Context:
             self.screenshot = None
 
 
+IMAGE_LABELS = {
+    "window": ("capture jointe", "Une capture de cette fenêtre est jointe."),
+    "clipboard": ("image copiée", "Une image que je viens de copier est jointe."),
+    "screenshot": ("capture d'écran", "Une capture d'écran (zone que j'ai choisie) est jointe."),
+}
+
+
 def collect(
     config: PrivacyConfig,
     selection: bool = False,
     screenshot: bool = False,
     failure: dict | None = None,
+    image: Path | None = None,
+    image_kind: str = "window",
 ) -> Context:
+    """Lit le contexte. `image` : image déjà prête (copie temporaire), jointe à la place d'une capture."""
     window = hyprland.active_window()
     if window and privacy.is_blocked(window.window_class, config.blocked_classes):
         return Context(window=window, blocked=True)
@@ -43,7 +54,9 @@ def collect(
         if len(text) > MAX_SELECTION:
             text = text[:MAX_SELECTION] + "\n[… tronqué]"
         context.selection = privacy.redact_secrets(text)
-    if screenshot and window:
+    if image:
+        context.screenshot, context.image_kind = image, image_kind
+    elif screenshot and window:
         context.screenshot = screen.capture(window)
     return context
 
@@ -59,7 +72,7 @@ def describe(context: Context) -> str:
     if context.selection:
         parts.append(f"sélection : {len(context.selection)} car.")
     if context.screenshot:
-        parts.append("capture jointe")
+        parts.append(IMAGE_LABELS[context.image_kind][0])
     return " · ".join(parts)
 
 
@@ -110,7 +123,7 @@ def build_prompt(
             f"dossier {cwd}) :\n```\n{command}\n```"
         )
     if context.screenshot:
-        parts.append("Une capture de cette fenêtre est jointe.")
+        parts.append(IMAGE_LABELS[context.image_kind][1])
     if context.selection:
         parts.append(f"Texte sélectionné :\n```\n{context.selection}\n```")
 

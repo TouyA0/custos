@@ -5,6 +5,7 @@ threads (serveur IPC, appels à Claude) passent par OverlayUI, qui s'y ramène
 avec GLib.idle_add.
 """
 
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -16,9 +17,11 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Graphene", "1.0")
+gi.require_version("Gsk", "4.0")
+gi.require_version("Pango", "1.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gsk, Gtk, Pango
 from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.config import MascotConfig
@@ -31,6 +34,13 @@ APP_ID = "io.github.touya0.Custos"
 PADDING = 0.1  # marge autour du sprite (fraction de la taille) pour le flottement et le rebond
 HALO_COLOR = (245, 245, 250)
 HALO_OPACITY = 0.9
+
+BADGE_RADIUS = 0.13  # fraction de la taille de la mascotte
+BADGE_PULSE = 1.4  # secondes
+BADGE_BORDER_WIDTH = 2.0
+BADGE_FILL = Gdk.RGBA(red=0.937, green=0.914, blue=0.875, alpha=1.0)  # crème #efe9df
+BADGE_BORDER = Gdk.RGBA(red=0.122, green=0.176, blue=0.310, alpha=1.0)  # marine #1f2d4f
+BADGE_ICONS = {"selection": "📋", "clipboard-image": "🖼\ufe0f", "screenshot": "🖼\ufe0f"}
 
 DEFAULT_SPRITES = Path(__file__).resolve().parents[3] / "assets" / "sprites"
 
@@ -98,6 +108,7 @@ class MascotWidget(Gtk.Widget):
         self.size = config.size
         self.sprites = sprites
         self.animator = animator
+        self.notice: str | None = None  # badge affiché (voir watch.SELECTION…)
         canvas = round(self.size * (1 + 2 * PADDING))
         self.set_size_request(canvas, canvas)
         self._fps = 0
@@ -130,6 +141,35 @@ class MascotWidget(Gtk.Widget):
         if halo:
             snapshot.append_texture(halo, rect)
         snapshot.append_texture(texture, rect)
+        if self.notice:
+            self._draw_badge(snapshot)
+        snapshot.restore()
+
+    def _draw_badge(self, snapshot: Gtk.Snapshot) -> None:
+        """Pastille en haut à droite : Custos a remarqué quelque chose (📋 texte, 🖼 image)."""
+        pulse = 1 + 0.08 * math.sin(2 * math.pi * time.monotonic() / BADGE_PULSE)
+        radius = self.size * BADGE_RADIUS * pulse
+        cx, cy = self.size * 0.34, -self.size * 0.36
+        bounds = Graphene.Rect()
+        bounds.init(cx - radius, cy - radius, 2 * radius, 2 * radius)
+        circle = Gsk.RoundedRect()
+        circle.init_from_rect(bounds, radius)
+
+        snapshot.push_rounded_clip(circle)
+        snapshot.append_color(BADGE_FILL, bounds)
+        snapshot.pop()
+        snapshot.append_border(circle, [BADGE_BORDER_WIDTH] * 4, [BADGE_BORDER] * 4)
+
+        layout = self.create_pango_layout(BADGE_ICONS.get(self.notice, "✨"))
+        font = Pango.FontDescription.from_string("sans")
+        font.set_absolute_size(radius * 1.1 * Pango.SCALE)
+        layout.set_font_description(font)
+        _ink, logical = layout.get_pixel_extents()
+        origin = Graphene.Point()
+        origin.init(cx - logical.width / 2, cy - logical.height / 2)
+        snapshot.save()
+        snapshot.translate(origin)
+        snapshot.append_layout(layout, BADGE_BORDER)
         snapshot.restore()
 
 
@@ -138,6 +178,7 @@ class MascotOverlay:
         folder = Path(config.sprites_dir).expanduser() if config.sprites_dir else DEFAULT_SPRITES
         self.app = app
         self.animator = Animator(config.sleep_after, now=time.monotonic())
+        self._notice_timer = 0
 
         self.window = Gtk.Window(application=app, title="Custos", decorated=False)
         self.window.add_css_class("custos")
@@ -186,6 +227,21 @@ class MascotOverlay:
         if self.state is not MascotState.THINKING:
             self.set_state(MascotState.IDLE)
 
+    def show_notice(self, kind: str | None, duration: float) -> None:
+        self.widget.notice = kind
+        if self._notice_timer:
+            GLib.source_remove(self._notice_timer)
+            self._notice_timer = 0
+        if kind:
+            if self.state is MascotState.SLEEPING:
+                self.set_state(MascotState.IDLE)  # tu es là : elle se réveille
+            self._notice_timer = GLib.timeout_add(int(duration * 1000), self._expire_notice)
+
+    def _expire_notice(self) -> bool:
+        self._notice_timer = 0
+        self.widget.notice = None
+        return GLib.SOURCE_REMOVE
+
     def show(self) -> None:
         self.window.present()
 
@@ -193,8 +249,9 @@ class MascotOverlay:
 class OverlayUI:
     """Interface du daemon (voir daemon.UI), utilisable depuis n'importe quel thread."""
 
-    def __init__(self, app: "MascotApp") -> None:
+    def __init__(self, app: "MascotApp", notice_duration: float) -> None:
         self.app = app
+        self.notice_duration = notice_duration
 
     def connect(self, daemon) -> None:
         """Relie la mascotte et la bulle au daemon."""
@@ -230,6 +287,9 @@ class OverlayUI:
 
     def show_error(self, text: str) -> None:
         self._on_gtk_thread(lambda overlay: overlay.bubble.show_error(text))
+
+    def show_notice(self, kind: str | None) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.show_notice(kind, self.notice_duration))
 
 
 class MascotApp(Gtk.Application):

@@ -21,3 +21,12 @@ blocked_classes = ["org.keepassxc.KeePassXC", "Bitwarden"]
 [shell]
 # La mascotte réagit (localement, sans appeler Claude) quand une commande échoue.
 react_on_failure = true
+
+[notice]
+# Custos remarque (localement, sans appeler Claude) ce que tu pourrais vouloir lui
+# montrer : un badge s'allume sur la mascotte, un clic ouvre la bulle avec ce contenu.
+selection = true    # texte sélectionné
+images = true       # image copiée dans le presse-papier
+screenshots = true  # capture de zone caelestia (SUPER + SHIFT + S)
+screenshot_glob = "/tmp/caelestia-picker-*.png"
+duration = 10       # secondes d'affichage du badge
