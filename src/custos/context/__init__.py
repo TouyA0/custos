@@ -8,6 +8,7 @@ from custos.context import clipboard, hyprland, privacy, screen
 from custos.context.hyprland import ActiveWindow
 
 MAX_SELECTION = 20_000  # caractères
+MAX_OUTPUT = 8_000  # caractères : la fin de la sortie d'une commande, là où est l'erreur
 
 DEFAULT_QUESTION = "Aide-moi avec ce texte : explique-le, ou corrige-le si c'est moi qui l'ai écrit."
 FAILURE_QUESTION = "Pourquoi cette commande a échoué, et comment la corriger ?"
@@ -85,6 +86,8 @@ def describe(context: Context) -> str:
     if context.failure:
         command = _short(privacy.redact_secrets(context.failure.get("command", "")))
         parts.append(f"commande en échec : {command}")
+        if context.failure.get("output"):
+            parts.append("sortie jointe")
     elif context.attached and app:
         parts.append(f"📌 {app}")
     if context.selection:
@@ -136,6 +139,12 @@ def build_prompt(question: str | None, context: Context) -> str:
             f"Cette commande vient d'échouer (code de sortie {context.failure.get('exit_code')}, "
             f"dossier {cwd}) :\n```\n{command}\n```"
         )
+        # Masquage avant de couper : un secret à cheval sur la coupure serait raté.
+        output = privacy.redact_secrets(context.failure.get("output") or "")
+        if output:
+            if len(output) > MAX_OUTPUT:
+                output = "[… début tronqué]\n" + output[-MAX_OUTPUT:]
+            parts.append(f"Sa sortie :\n```\n{output}\n```")
     if context.screenshot:
         parts.append(IMAGE_LABELS[context.image_kind][1])
     if context.selection:

@@ -24,8 +24,8 @@ def socket_path(name: str = ".socket.sock") -> Path | None:
     return Path(runtime) / "hypr" / signature / name
 
 
-def request(command: str) -> dict | list | None:
-    """Envoie `command` (ex. "cursorpos") au socket de Hyprland et décode la réponse JSON."""
+def _send(command: str) -> bytes | None:
+    """Envoie `command` au socket de commandes de Hyprland et renvoie la réponse brute."""
     path = socket_path()
     if path is None:
         return None
@@ -33,13 +33,36 @@ def request(command: str) -> dict | list | None:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(2)
             sock.connect(str(path))
-            sock.sendall(f"j/{command}".encode())
+            sock.sendall(command.encode())
             data = b""
             while chunk := sock.recv(65536):
                 data += chunk
-        return json.loads(data)
-    except (OSError, json.JSONDecodeError):
+        return data
+    except OSError:
         return None
+
+
+def request(command: str) -> dict | list | None:
+    """Envoie `command` (ex. "cursorpos") au socket de Hyprland et décode la réponse JSON."""
+    data = _send(f"j/{command}")
+    if data is None:
+        return None
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return None
+
+
+def send_shortcut(mods: str, key: str, address: str) -> bool:
+    """Envoie un raccourci clavier à une fenêtre précise, même si elle n'a pas le focus.
+
+    Syntaxe Lua (config Hyprland en Lua), puis l'ancienne syntaxe en repli.
+    """
+    lua = f'hl.dsp.send_shortcut({{ mods = "{mods}", key = "{key}", window = "address:{address}" }})'
+    for command in (f"dispatch {lua}", f"dispatch sendshortcut {mods}, {key}, address:{address}"):
+        if _send(command) == b"ok":
+            return True
+    return False
 
 
 def cursor_position() -> tuple[int, int] | None:

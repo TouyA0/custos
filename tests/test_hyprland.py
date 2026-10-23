@@ -54,3 +54,16 @@ def test_listen_reads_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_listen_without_hyprland_returns(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
     hyprland.listen(lambda *a: None, threading.Event())  # ne bloque pas
+
+
+def test_send_shortcut_falls_back_to_old_syntax(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[str] = []
+
+    def fake_send(command: str) -> bytes:
+        sent.append(command)
+        return b"ok" if "sendshortcut" in command else b"error"
+
+    monkeypatch.setattr(hyprland, "_send", fake_send)
+    assert hyprland.send_shortcut("CTRL SHIFT ALT", "F12", "0xabc")
+    assert 'window = "address:0xabc"' in sent[0]
+    assert sent[1] == "dispatch sendshortcut CTRL SHIFT ALT, F12, address:0xabc"

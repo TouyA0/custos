@@ -27,6 +27,12 @@ FULLSCREEN_EVENTS = {"fullscreen", "activewindowv2", "workspacev2", "closewindow
 RESUME_WINDOW = 600.0  # secondes : rouvrir la carte dans ce délai reprend la conversation
 RECENT_FAILURE = 30.0  # secondes : même durée que l'inquiétude de la mascotte
 IGNORED_EXIT_CODES = {130, 148}  # Ctrl+C et Ctrl+Z : interrompre n'est pas une erreur
+# Sortie de la commande en échec : terminaux pris en charge, et raccourci que leur config
+# associe à `custos shell-output` (voir integrations/terminal/foot.ini).
+OUTPUT_TERMINALS = {"foot"}
+OUTPUT_SHORTCUT = ("CTRL SHIFT ALT", "F12")
+OUTPUT_DELAY = 0.3  # secondes : le temps que le terminal marque la fin de la sortie
+OUTPUT_TIMEOUT = 5.0  # secondes : au-delà, une sortie reçue n'est plus celle demandée
 
 
 class UI(Protocol):
@@ -71,6 +77,7 @@ class Daemon:
         self.session: Session | None = None
         self.last_failure: dict | None = None  # dernière commande shell en échec
         self._failure_at = 0.0
+        self._output_requested_at: float | None = None
         self.notice: Notice | None = None
         self.hidden = False  # mascotte masquée par une fenêtre en plein écran
         self.attached: str | None = None  # adresse de la fenêtre où la mascotte est accrochée
@@ -85,6 +92,8 @@ class Daemon:
                 self.ask(message)
             case "shell-event":
                 self.shell_event(message)
+            case "shell-output":
+                self.shell_output(message)
             case "attach":
                 self.attach_active()
             case "detach":
@@ -354,6 +363,40 @@ class Daemon:
         self._failure_at = time.monotonic()
         log.info("commande en échec (code %s)", message.get("exit_code"))
         self.ui.set_state(MascotState.WORRIED)
+        if self.config.shell.capture_output:
+            # La commande vient de finir : la fenêtre active est le terminal où elle a tourné.
+            window = hyprland.active_window()
+            if window and window.window_class in OUTPUT_TERMINALS and not privacy.is_blocked(
+                window.window_class, window.title, self.config.privacy
+            ):
+                _later(OUTPUT_DELAY, self._request_output, window.address)
+
+    def _request_output(self, address: str) -> None:
+        """Demande au terminal la sortie de la dernière commande (réponse : `shell-output`).
+
+        Rien n'est envoyé à Claude ici : la sortie n'est jointe que si tu demandes de l'aide.
+        """
+        self._output_requested_at = time.monotonic()
+        if not hyprland.send_shortcut(*OUTPUT_SHORTCUT, address):
+            log.warning("impossible de demander la sortie de la commande au terminal")
+
+    def shell_output(self, message: dict) -> None:
+        """Sortie de la commande en échec, envoyée par le terminal via `custos shell-output`."""
+        requested = self._output_requested_at
+        self._output_requested_at = None
+        if requested is None or time.monotonic() - requested > OUTPUT_TIMEOUT:
+            return  # pas demandée par Custos : on l'ignore
+        if self.last_failure is None:
+            return
+        output = (message.get("output") or "").rstrip()
+        self.last_failure["output"] = output
+        log.info("sortie de la commande reçue (%d car.)", len(output))
+
+
+def _later(delay: float, action, *args) -> None:
+    timer = threading.Timer(delay, action, args)
+    timer.daemon = True
+    timer.start()
 
 
 def _gtk_app(config: Config):

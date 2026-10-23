@@ -635,3 +635,69 @@ def test_cli_without_daemon(monkeypatch, tmp_path: Path, capsys) -> None:
     assert cli.main(["ask", "salut"]) == 1
     assert "custos start" in capsys.readouterr().out
     assert len(notified) == 1
+
+
+@pytest.fixture
+def terminal(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    """Terminal foot actif ; note les raccourcis envoyés, sans attendre le délai."""
+    sent: list[tuple] = []
+    window = ActiveWindow("foot", "~", 0, 0, 100, 100, address="0xabc")
+    monkeypatch.setattr(daemon.hyprland, "active_window", lambda: window)
+    monkeypatch.setattr(daemon.hyprland, "send_shortcut", lambda *a: sent.append(a) or True)
+    monkeypatch.setattr(daemon, "_later", lambda _delay, action, *args: action(*args))
+    return sent
+
+
+def capturing_config() -> Config:
+    config = Config()
+    config.shell.capture_output = True
+    return config
+
+
+def test_failure_output_is_requested_and_joined(ui, prompts, collected, terminal) -> None:
+    d = daemon.Daemon(capturing_config(), ui)
+    d.handle(dict(FAILURE))
+    assert terminal == [("CTRL SHIFT ALT", "F12", "0xabc")]
+    d.handle({"type": "shell-output", "output": "pacmna : commande introuvable\n"})
+    assert prompts == []  # rien n'est envoyé à Claude avant que tu le demandes
+
+    d.open_from_mascot()
+    assert ui.prompts[0][0] == "commande en échec : pacmna -Syu · sortie jointe"
+    d.answer("")
+    assert "Sa sortie :\n```\npacmna : commande introuvable\n```" in prompts[0][0]
+
+
+def test_output_is_not_requested_by_default(ui, terminal) -> None:
+    daemon.Daemon(Config(), ui).handle(dict(FAILURE))
+    assert terminal == []
+
+
+def test_output_is_not_requested_from_other_apps_or_blocked_terminals(
+    monkeypatch, ui, terminal
+) -> None:
+    config = capturing_config()
+    config.privacy.blocked_titles = ["*secret*"]
+    d = daemon.Daemon(config, ui)
+    monkeypatch.setattr(daemon.hyprland, "active_window", lambda: BROWSER)
+    d.handle(dict(FAILURE))
+    blocked = ActiveWindow("foot", "ssh serveur-secret", 0, 0, 100, 100, address="0xdef")
+    monkeypatch.setattr(daemon.hyprland, "active_window", lambda: blocked)
+    d.handle(dict(FAILURE))
+    assert terminal == []
+
+
+def test_unrequested_output_is_ignored(ui, terminal) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(dict(FAILURE))
+    d.handle({"type": "shell-output", "output": "autre chose"})
+    assert "output" not in d.last_failure
+
+
+def test_cli_shell_output_reads_stdin(monkeypatch) -> None:
+    sent: list[dict] = []
+    monkeypatch.setattr(cli.ipc, "send", sent.append)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("x" * 200_000 + "fin"))
+    assert cli.main(["shell-output"]) == 0
+    assert sent[0]["type"] == "shell-output"
+    assert len(sent[0]["output"]) == cli.MAX_OUTPUT
+    assert sent[0]["output"].endswith("fin")

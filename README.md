@@ -100,6 +100,13 @@ source ~/Documents/Projets/custos/integrations/shell/custos.fish
 
 Puis `hyprctl reload`. Un hook bash existe aussi : `integrations/shell/custos.bash`.
 
+Pour que Claude voie aussi la **sortie d'une commande en échec** (le message d'erreur, pas
+seulement la commande), ajoute le raccourci de `integrations/terminal/foot.ini` à
+`~/.config/foot/foot.ini` et `capture_output = true` dans la section `[shell]` de la config.
+Après un échec, Custos demande la sortie à foot (via Hyprland, sans prendre le focus) et la
+garde en mémoire, sans appeler Claude : elle n'est jointe, secrets masqués, que si tu
+cliques pour demander de l'aide.
+
 ## Structure
 
 ```
@@ -124,6 +131,6 @@ src/custos/
 assets/sprites/     images de la mascotte, un dossier par état
 assets/icon.png     icône de la barre
 scripts/            préparation des sprites
-integrations/       snippets Hyprland (Lua) et bash
+integrations/       snippets Hyprland (Lua), shell (fish, bash) et terminal (foot)
 tests/
 ```

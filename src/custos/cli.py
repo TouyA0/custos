@@ -5,8 +5,11 @@ Hyprland ou le hook shell) lui envoient simplement un message via le socket.
 """
 
 import argparse
+import sys
 
 from custos import __version__, ipc, supervisor
+
+MAX_OUTPUT = 100_000  # caractères : la fin de la sortie suffit, et le socket a une limite
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
     shell.add_argument("--exit-code", type=int, required=True)
     shell.add_argument("--command", default="")
     shell.add_argument("--cwd", default="")
+
+    sub.add_parser(
+        "shell-output",
+        help="transmet la sortie de la dernière commande, lue sur l'entrée standard (terminal)",
+    )
 
     return parser
 
@@ -80,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except ipc.DaemonNotRunning:
                 pass  # appelé après chaque commande : silencieux si Custos ne tourne pas
+        elif args.subcommand == "shell-output":
+            output = sys.stdin.read()[-MAX_OUTPUT:]
+            try:
+                ipc.send({"type": "shell-output", "output": output})
+            except ipc.DaemonNotRunning:
+                pass  # appelé par le terminal, sans personne pour lire un message
     except ipc.DaemonNotRunning:
         # `custos ask` vient souvent d'un raccourci, sans terminal : on prévient aussi à l'écran.
         from custos.ui.notify import notify

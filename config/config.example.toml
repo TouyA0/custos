@@ -28,6 +28,9 @@ blocked_titles = ["*privé*", "*private*", "*mot de passe*", "*password*"]
 [shell]
 # La mascotte réagit (localement, sans appeler Claude) quand une commande échoue.
 react_on_failure = true
+# Joint aussi la sortie de la commande (le message d'erreur) quand tu demandes de l'aide.
+# Terminal foot seulement, avec le raccourci de integrations/terminal/foot.ini.
+capture_output = true
 
 [notice]
 # Custos remarque (localement, sans appeler Claude) ce que tu pourrais vouloir lui

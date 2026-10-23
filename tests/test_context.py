@@ -92,3 +92,12 @@ def test_app_name(window_class: str, name: str) -> None:
 def test_describe_says_nothing_for_plain_active_window() -> None:
     assert context.describe(Context(window=WINDOW)) == ""
     assert context.describe(Context(window=WINDOW, screenshot=Path("/tmp/x.png"))) == "capture de Foot"
+
+
+def test_failure_output_is_redacted_then_truncated() -> None:
+    output = "x" * (context.MAX_OUTPUT + 10) + " token=abcdef123456 erreur finale"
+    failure = {"command": "make", "exit_code": 2, "output": output}
+    prompt = build_prompt(None, Context(window=WINDOW, failure=failure))
+    assert "[… début tronqué]" in prompt
+    assert "abcdef123456" not in prompt
+    assert "erreur finale\n```" in prompt

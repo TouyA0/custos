@@ -40,6 +40,8 @@ class PrivacyConfig:
 @dataclass
 class ShellConfig:
     react_on_failure: bool = True
+    # Joint la sortie de la commande en échec (foot : voir integrations/terminal/foot.ini).
+    capture_output: bool = False
 
 
 @dataclass
