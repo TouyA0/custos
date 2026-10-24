@@ -79,5 +79,23 @@ class NotifyUI:
     def monitors_changed(self) -> None:
         pass
 
+    # Sans carte, personne pour valider une action sensible : Custos répond sans outils.
+    interactive = False
+
+    def set_status(self, text: str) -> None:
+        pass
+
+    def reset_answer(self) -> None:
+        pass
+
+    def ask_permission(self, description: str) -> None:
+        pass
+
+    def permission_done(self) -> None:
+        pass
+
+    def show_progress(self, question: str, status: str, answer: str, permission: str) -> None:
+        pass
+
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self.end_answer(answer)

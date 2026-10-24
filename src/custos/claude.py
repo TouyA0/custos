@@ -6,9 +6,12 @@ automatiques de la mascotte restent locales.
 
 import base64
 import json
+import shutil
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from custos.config import ClaudeConfig
@@ -20,14 +23,96 @@ l'utilisateur. Tu réponds dans une petite bulle : sois bref, clair et direct, e
 français sauf si on te parle dans une autre langue. Pas de longues introductions. \
 Quand tu proposes une commande, mets-la dans un bloc de code, adaptée à sa machine."""
 
+# Avec les outils (mode agent) : Custos agit sur la machine, la bulle ne montre que la fin.
+AGENT_PROMPT = """\
+Tu as les outils de Claude Code et tu agis directement sur sa machine pour faire ce \
+qu'il demande : lire des fichiers et des journaux, lancer des commandes, modifier sa \
+configuration, ouvrir une page (`xdg-open URL`) ou une application. Fais-le toi-même \
+plutôt que de lui expliquer comment faire.
+- Ta réponse finale est la seule chose affichée dans la bulle : donne seulement la \
+conclusion (ce que tu as trouvé ou fait, si ça a marché, ce qui lui reste à faire), \
+pas le récit de tes étapes. Le détail reste consultable en ouvrant la conversation en grand.
+- Tu n'as pas de mot de passe : n'utilise jamais sudo. Pour une commande qui doit \
+tourner en root, lance `{custos} terminal 'la commande'` : un terminal s'ouvre avec la \
+commande prête, c'est lui qui la valide et tape son mot de passe. Dis-le dans ta conclusion.
+- Ne lis jamais ses secrets (clés SSH, GPG, gestionnaire de mots de passe, jetons)."""
+
 # Toujours en dernier : le caractère choisi change le ton, pas la longueur.
 BREVITY = "Quel que soit ton caractère, reste bref : tes réponses s'affichent dans une petite bulle."
 
+# Mode agent : jamais de sudo (pas de mot de passe), jamais les secrets.
+DISALLOWED_TOOLS = [
+    "Bash(sudo *)",
+    "Read(~/.ssh/**)",
+    "Read(~/.gnupg/**)",
+    "Read(~/.local/share/keyrings/**)",
+    "Read(~/.claude/.credentials.json)",
+    "Read(**/*.kdbx)",
+]
 
-def build_system_prompt(machine: str = "", persona: str = "") -> str:
-    """Prompt système : la base, la machine détectée, puis ce que l'utilisateur a écrit
-    dans custos.md (caractère, préférences)."""
+ALLOW, ALWAYS, DENY = "allow", "always", "deny"  # réponses à une demande de permission
+
+
+@dataclass
+class Permission:
+    """Demande de Claude pour une action que le mode auto juge sensible."""
+
+    tool: str
+    input: dict
+
+    @property
+    def description(self) -> str:
+        return describe_permission(self.tool, self.input)
+
+
+def _home(text: str) -> str:
+    home = str(Path.home())
+    return text.replace(home, "~") if home != "/" else text
+
+
+def describe_tool(name: str, data: dict) -> str:
+    """Étape en cours, en une ligne : « ▶ journalctl -b -1 », « lit ~/.config/… »."""
+    if name == "Bash":
+        command = (data.get("command") or "").strip().splitlines()
+        return f"▶ {_home(command[0])}" if command else "▶ commande"
+    if name == "Read":
+        return f"lit {_home(data.get('file_path', ''))}"
+    if name in ("Edit", "Write", "NotebookEdit"):
+        return f"modifie {_home(data.get('file_path') or data.get('notebook_path') or '')}"
+    if name in ("Grep", "Glob"):
+        return f"cherche « {data.get('pattern', '')} »"
+    if name == "WebSearch":
+        return f"cherche sur le web : {data.get('query', '')}"
+    if name == "WebFetch":
+        return f"lit {data.get('url', '')}"
+    if name in ("Task", "Agent"):
+        return f"délègue : {data.get('description', '')}"
+    return name
+
+
+def describe_permission(name: str, data: dict) -> str:
+    """Ce que Claude veut faire, en entier : la commande exacte, le fichier, l'adresse."""
+    if name == "Bash":
+        return (data.get("command") or "").strip()
+    if name in ("Edit", "Write", "NotebookEdit"):
+        return f"Modifier {_home(data.get('file_path') or data.get('notebook_path') or '')}"
+    if name == "WebFetch":
+        return f"Ouvrir {data.get('url', '')}"
+    return f"{name} {json.dumps(data, ensure_ascii=False)[:300]}"
+
+
+def custos_executable() -> str:
+    """Chemin de la commande `custos` : ~/.local/bin n'est pas forcément dans le PATH du daemon."""
+    beside = Path(sys.executable).with_name("custos")
+    return str(beside) if beside.exists() else (shutil.which("custos") or "custos")
+
+
+def build_system_prompt(machine: str = "", persona: str = "", agent: bool = False) -> str:
+    """Prompt système : la base, le mode agent, la machine détectée, puis ce que
+    l'utilisateur a écrit dans custos.md (caractère, préférences)."""
     parts = [SYSTEM_PROMPT]
+    if agent:
+        parts.append(AGENT_PROMPT.format(custos=custos_executable()))
     if machine:
         parts.append(f"Sa machine (détectée automatiquement) :\n{machine}")
     if persona:
@@ -52,11 +137,13 @@ def conversations_dir() -> Path:
 
 
 def build_command(
-    config: ClaudeConfig, system_prompt: str = SYSTEM_PROMPT, resume: str | None = None
+    config: ClaudeConfig,
+    system_prompt: str = SYSTEM_PROMPT,
+    resume: str | None = None,
+    agent: bool = False,
 ) -> list[str]:
-    # Aucun outil, aucun réglage ni serveur MCP : dans la bulle, Custos n'utilise
-    # Claude que pour répondre, jamais pour agir. La session est enregistrée pour les
-    # questions de suivi (--resume) et pour l'ouvrir en grand dans un terminal.
+    # Ni réglages, ni hooks, ni serveurs MCP de l'utilisateur. La session est enregistrée
+    # pour les questions de suivi (--resume) et pour l'ouvrir en grand dans un terminal.
     command = [
         "claude", "-p",
         "--model", config.model,
@@ -64,11 +151,22 @@ def build_command(
         "--output-format", "stream-json",
         "--verbose",
         "--include-partial-messages",
-        "--tools", "",
         "--setting-sources", "",
         "--strict-mcp-config",
-        "--system-prompt", system_prompt,
     ]
+    if agent:
+        # Les outils de Claude Code en mode auto : il agit seul, et ce que le mode auto
+        # juge sensible nous est demandé (control_request « can_use_tool », voir ask).
+        command += [
+            "--permission-mode", "auto",
+            "--permission-prompts", "host",
+            "--permission-prompt-tool", "stdio",
+            "--add-dir", str(Path.home()),
+            "--disallowedTools", *DISALLOWED_TOOLS,
+        ]
+    else:
+        command += ["--tools", ""]  # rien que répondre
+    command += ["--system-prompt", system_prompt]
     if resume:
         command += ["--resume", resume]
     return command
@@ -118,6 +216,54 @@ def parse_session(line: str) -> str | None:
     return None
 
 
+def parse_tools(line: str) -> list[str]:
+    """Étapes annoncées dans une ligne : les outils qu'un message de Claude utilise."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return []
+    if event.get("type") != "assistant":
+        return []
+    return [
+        describe_tool(block.get("name", ""), block.get("input") or {})
+        for block in event.get("message", {}).get("content", [])
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
+
+
+def parse_permission(line: str) -> tuple[str, Permission] | None:
+    """Demande de permission (control_request « can_use_tool ») : son identifiant et son objet."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    request = event.get("request") or {}
+    if event.get("type") != "control_request" or request.get("subtype") != "can_use_tool":
+        return None
+    permission = Permission(request.get("tool_name", ""), request.get("input") or {})
+    return event.get("request_id", ""), permission
+
+
+def permission_response(request_id: str, permission: Permission, choice: str) -> dict:
+    """Réponse à envoyer à Claude Code pour une demande de permission."""
+    # « Toujours » est retenu par Custos (voir daemon) : pour Claude Code, c'est « autoriser ».
+    if choice == DENY:
+        decision = {"behavior": "deny", "message": "L'utilisateur a refusé cette action."}
+    else:
+        decision = {"behavior": "allow", "updatedInput": permission.input}
+    return {
+        "type": "control_response",
+        "response": {"subtype": "success", "request_id": request_id, "response": decision},
+    }
+
+
+def _is_result(line: str) -> bool:
+    try:
+        return json.loads(line).get("type") == "result"
+    except (json.JSONDecodeError, AttributeError):
+        return False
+
+
 def ask(
     prompt: str,
     config: ClaudeConfig,
@@ -126,19 +272,25 @@ def ask(
     resume: str | None = None,
     on_session: Callable[[str], None] | None = None,
     cancel: threading.Event | None = None,
+    agent: bool = False,
+    on_tool: Callable[[str], None] | None = None,
+    on_permission: Callable[[Permission], str] | None = None,
 ) -> Iterator[str]:
     """Envoie `prompt` à Claude et renvoie la réponse morceau par morceau.
 
     `resume` : session à poursuivre (question de suivi). `on_session` reçoit
     l'identifiant de la session, pour la poursuivre ou l'ouvrir en grand ensuite.
     `cancel` : une fois levé, `claude` est arrêté et la réponse s'interrompt sans erreur.
+    `agent` : avec les outils de Claude Code. `on_tool` reçoit chaque étape (le texte déjà
+    reçu n'était alors qu'un commentaire, pas la réponse) ; `on_permission` décide d'une
+    action sensible (ALLOW, ALWAYS ou DENY) et peut attendre ta réponse.
     """
     message = build_message(prompt, images)
     workdir = conversations_dir()
     workdir.mkdir(parents=True, exist_ok=True)
     try:
         process = subprocess.Popen(
-            build_command(config, system_prompt, resume),
+            build_command(config, system_prompt, resume, agent),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -149,7 +301,8 @@ def ask(
     except FileNotFoundError as exc:
         raise ClaudeError("la commande `claude` est introuvable") from exc
 
-    timer = threading.Timer(config.timeout, process.kill)
+    timeout = config.agent_timeout if agent else config.timeout
+    timer = threading.Timer(timeout, process.kill)
     timer.start()
     if cancel:
         # Arrêt immédiat, même si Claude n'a encore rien envoyé.
@@ -162,17 +315,31 @@ def ask(
         threading.Thread(target=watch_cancel, daemon=True).start()
     received = False
     try:
+        # L'entrée reste ouverte jusqu'au résultat : on y répond aux demandes de permission.
         process.stdin.write(json.dumps(message) + "\n")
-        process.stdin.close()
+        process.stdin.flush()
         for line in process.stdout:
             session = parse_session(line)
             if session and on_session:
                 on_session(session)
+            for step in parse_tools(line):
+                if on_tool:
+                    on_tool(step)
+            request = parse_permission(line)
+            if request:
+                request_id, permission = request
+                choice = on_permission(permission) if on_permission else DENY
+                process.stdin.write(json.dumps(permission_response(request_id, permission, choice)) + "\n")
+                process.stdin.flush()
             text = parse_line(line)
             if text:
                 received = True
                 yield text
+            if _is_result(line):
+                process.stdin.close()  # fin de la conversation : `claude` peut s'arrêter
         process.wait()
+    except (BrokenPipeError, ValueError):
+        process.wait()  # `claude` arrêté (fermeture, délai dépassé) pendant qu'on lui écrivait
     finally:
         timer.cancel()
         if process.poll() is None:
@@ -182,7 +349,7 @@ def ask(
     if cancel and cancel.is_set():
         return  # interrompue à ta demande : pas une erreur
     if process.returncode == -9:
-        raise ClaudeError(f"pas de réponse après {config.timeout} s")
+        raise ClaudeError(f"pas de réponse après {timeout} s")
     if process.returncode != 0 and not received:
         stderr = process.stderr.read().strip()
         raise ClaudeError(stderr or f"`claude` a quitté avec le code {process.returncode}")

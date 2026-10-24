@@ -2,7 +2,9 @@
 
 Une ligne pour demander, puis seulement la dernière réponse. ＋ démarre une nouvelle
 conversation, ↗ ouvre la conversation complète en grand (Claude Code dans un terminal).
-Un clic n'importe où en dehors de la carte la ferme.
+Un clic n'importe où en dehors de la carte la ferme ; un travail en cours continue alors
+en fond (■ l'arrête). Pendant qu'il agit, une ligne montre l'étape en cours, et une
+action sensible attend ici ton accord.
 
 La carte vit dans une surface layer-shell plein écran presque invisible : un clic sur
 cette surface, hors de la carte, la ferme. (Une surface séparée pour attraper ces clics
@@ -55,6 +57,27 @@ window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
 .card .question {{ color: rgba(26, 31, 43, 0.55); }}
 .card .thinking {{ color: rgba(26, 31, 43, 0.5); }}
 .card .error {{ color: #b3402f; }}
+.card .permission {{
+    background-color: rgba(179, 64, 47, 0.07);
+    border: 1px solid rgba(179, 64, 47, 0.25);
+    border-radius: 10px;
+    padding: 8px 10px;
+}}
+.card .permission .title {{ color: #b3402f; font-size: 0.9em; }}
+.card .permission .action {{ font-size: 0.95em; }}
+.card .permission button {{
+    background: rgba(26, 31, 43, 0.06);
+    border: none;
+    box-shadow: none;
+    border-radius: 8px;
+    color: #1a1f2b;
+    padding: 2px 10px;
+    min-height: 24px;
+}}
+.card .permission button:hover {{ background: rgba(26, 31, 43, 0.12); }}
+.card .permission button.allow {{ background: #1f2d4f; }}
+.card .permission button.allow label {{ color: #f8f8fa; }}  /* sinon « .card label » l'emporte */
+.card .permission button.allow:hover {{ background: #2c3d66; }}
 .card scrolledwindow.code {{ background-color: rgba(26, 31, 43, 0.07); border-radius: 8px; }}
 .card label.code {{ padding: 8px 32px 8px 10px; }}
 .card .divider {{ background-color: rgba(26, 31, 43, 0.1); min-height: 1px; }}
@@ -114,7 +137,13 @@ class Bubble:
         on_close: Callable[[], None],
         on_open_full: Callable[[], None],
         on_new: Callable[[], None],
+        on_stop: Callable[[], None] = lambda: None,
+        on_permission: Callable[[str], None] = lambda choice: None,
     ) -> None:
+        self.on_stop = on_stop
+        self.on_permission = on_permission
+        self.status = ""  # étape en cours, pendant qu'il agit
+        self.permission = ""  # action qui attend ton accord
         self.on_submit = on_submit
         self.on_close = on_close
         self.on_open_full = on_open_full
@@ -166,7 +195,9 @@ class Bubble:
         self.open_button = _icon_button(
             "↗", "Ouvrir la conversation en grand", lambda *_: self.on_open_full()
         )
+        self.stop_button = _icon_button("■", "Arrêter", lambda *_: self.on_stop())
         header.append(self.info)
+        header.append(self.stop_button)
         header.append(self.new_button)
         header.append(self.open_button)
         header.append(_icon_button("✕", "Fermer (Échap)", lambda *_: self.close()))
@@ -178,8 +209,10 @@ class Bubble:
         self.scroll.set_child(self.blocks)
         self.scroll.set_margin_end(4)
 
-        self.thinking_label = Gtk.Label(xalign=0, visible=False)
+        self.thinking_label = Gtk.Label(xalign=0, visible=False, ellipsize=Pango.EllipsizeMode.END)
+        self.thinking_label.set_max_width_chars(1)
         self.thinking_label.add_css_class("thinking")
+        self.permission_box = self._permission_widget()
         self.error = Gtk.Label(xalign=0, wrap=True, visible=False)
         self.error.set_max_width_chars(1)
         self.error.add_css_class("error")
@@ -191,11 +224,37 @@ class Bubble:
         self.entry.set_margin_end(4)
         self.entry.connect("activate", self._on_activate)
 
-        for widget in (header, self.scroll, self.thinking_label, self.error, self.divider, self.entry):
+        for widget in (
+            header, self.scroll, self.permission_box, self.thinking_label, self.error, self.divider, self.entry
+        ):
             card.append(widget)
         card.set_halign(Gtk.Align.START)
         self.card = card
         self.window.set_child(card)
+
+    def _permission_widget(self) -> Gtk.Widget:
+        """Action sensible : ce qu'il veut faire, en entier, et tes trois réponses."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
+        box.add_css_class("permission")
+        title = Gtk.Label(label="⚠ Action sensible : je fais ça ?", xalign=0)
+        title.add_css_class("title")
+        self.permission_label = Gtk.Label(xalign=0, wrap=True, selectable=True, focusable=False)
+        self.permission_label.set_wrap_mode(Pango.WrapMode.CHAR)
+        self.permission_label.set_max_width_chars(1)
+        self.permission_label.add_css_class("action")
+        buttons = Gtk.Box(spacing=6, halign=Gtk.Align.END)
+        for label, choice, tooltip in (
+            ("Refuser", "deny", "Il ne le fait pas et cherche une autre solution"),
+            ("Toujours", "always", "Autoriser, et ne plus redemander dans cette conversation"),
+            ("Autoriser", "allow", "Autoriser cette fois"),
+        ):
+            button = Gtk.Button(label=label, tooltip_text=tooltip)
+            button.add_css_class(choice)
+            button.connect("clicked", lambda _b, choice=choice: self._answer_permission(choice))
+            buttons.append(button)
+        for widget in (title, self.permission_label, buttons):
+            box.append(widget)
+        return box
 
     def _text_widget(self, text: str) -> Gtk.Widget:
         label = Gtk.Label(xalign=0, wrap=True, selectable=True, focusable=False, hexpand=True)
@@ -285,9 +344,37 @@ class Bubble:
 
     def end_answer(self, answer: str) -> None:
         self._set_thinking(False)
+        self.status, self.permission = "", ""
         self.answer = answer
         self.entry.set_placeholder_text("Répondre…")
         self._render(from_top=True)
+
+    def set_status(self, text: str) -> None:
+        """Étape en cours (« ▶ journalctl -b -1 »), à côté des points d'attente."""
+        self.status = text
+        self._render()
+
+    def reset_answer(self) -> None:
+        """Le texte reçu n'était qu'un commentaire avant une étape : on ne garde que la conclusion."""
+        self.answer = ""
+        self._render()
+
+    def ask_permission(self, description: str) -> None:
+        self.permission = description
+        self._render()
+
+    def permission_done(self) -> None:
+        self.permission = ""
+        self._render()
+
+    def show_progress(self, question: str, status: str, answer: str, permission: str) -> None:
+        """Carte rouverte pendant qu'il travaille : là où il en est."""
+        self.question, self.status, self.answer, self.permission = question, status, answer, permission
+        self.summary = ""
+        self._show_error("")
+        self._set_thinking(True)
+        self._render()
+        self._show()
 
     def show_error(self, text: str) -> None:
         self._set_thinking(False)
@@ -305,7 +392,7 @@ class Bubble:
         self._fade_timer = GLib.timeout_add(FADE, self._hide)
         self._set_thinking(False)
         self._cancel_pending_render()
-        self.question, self.answer = "", ""
+        self.question, self.answer, self.status, self.permission = "", "", "", ""
         self.on_close()
 
     # --- interne -------------------------------------------------------------
@@ -359,8 +446,17 @@ class Bubble:
 
     def _animate_thinking(self) -> bool:
         self._thinking_frame = (self._thinking_frame + 1) % len(THINKING_FRAMES)
-        self.thinking_label.set_text(THINKING_FRAMES[self._thinking_frame])
+        self.thinking_label.set_text(self._thinking_text())
         return GLib.SOURCE_CONTINUE
+
+    def _thinking_text(self) -> str:
+        dots = THINKING_FRAMES[self._thinking_frame]
+        return f"{dots}  {self.status}" if self.status else dots
+
+    def _answer_permission(self, choice: str) -> None:
+        self.permission = ""
+        self._render()
+        self.on_permission(choice)
 
     def _flush_render(self) -> bool:
         self._render_pending = 0
@@ -387,6 +483,9 @@ class Bubble:
         has_answer = bool(self.answer.strip()) and not self.thinking
         self.new_button.set_visible(has_answer)
         self.open_button.set_visible(has_answer)
+        self.stop_button.set_visible(self.thinking)
+        self.permission_label.set_text(self.permission)
+        self.permission_box.set_visible(bool(self.permission))
 
         while child := self.blocks.get_first_child():
             self.blocks.remove(child)
@@ -394,8 +493,8 @@ class Bubble:
             self.blocks.append(self._code_widget(content) if kind == "code" else self._text_widget(content))
         self.scroll.set_visible(bool(self.answer.strip()))
 
-        self.thinking_label.set_text(THINKING_FRAMES[self._thinking_frame])
-        self.thinking_label.set_visible(self.thinking and not self.answer)
+        self.thinking_label.set_text(self._thinking_text())
+        self.thinking_label.set_visible(self.thinking and not self.answer and not self.permission)
         # Pendant la réponse, pas de champ : il revient (« Répondre… ») une fois qu'elle est finie.
         self.entry.set_visible(not self.thinking)
         self.divider.set_visible(bool(self.answer) and not self.thinking)

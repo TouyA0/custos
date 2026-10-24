@@ -3,7 +3,11 @@
 [claude]
 # Appelé via `claude -p` : utilise ton abonnement, pas de clé API.
 model = "claude-opus-5-5"
-timeout = 120  # secondes
+timeout = 120  # secondes, pour une simple réponse
+# Custos agit sur ton PC avec les outils de Claude Code (mode auto : il ne demande que pour
+# ce qui est sensible). false : il répond seulement, sans rien toucher.
+tools = true
+agent_timeout = 1800  # secondes : une vraie tâche peut être longue
 # Bouton ↗ de la bulle : ouvre la conversation en grand (Claude Code dans un terminal).
 open_command = "foot --working-directory={cwd} claude --resume {session} --model {model}"
 

@@ -34,6 +34,9 @@ def load_persona(path: Path | None = None) -> str:
 class ClaudeConfig:
     model: str = "claude-opus-5-5"
     timeout: int = 120
+    # Custos agit sur ton PC avec les outils de Claude Code (mode auto) ; false : il répond seulement.
+    tools: bool = True
+    agent_timeout: int = 1800  # secondes : une vraie tâche peut être longue
     # Ouvrir la conversation en grand (bouton ↗ de la bulle) : {session}, {cwd}, {model}
     open_command: str = "foot --working-directory={cwd} claude --resume {session} --model {model}"
 

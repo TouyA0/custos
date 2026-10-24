@@ -7,6 +7,8 @@ Hyprland ou le hook shell) lui envoient simplement un message via le socket.
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,12 +52,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="transmet la sortie de la dernière commande, lue sur l'entrée standard (terminal)",
     )
 
+    terminal = sub.add_parser(
+        "terminal", help="ouvre un terminal avec une commande prête, à valider toi-même (sudo…)"
+    )
+    terminal.add_argument("command", help="la commande à préparer")
+
     sub.add_parser(
         "agent-event",
         help="signale l'état d'une session Claude Code (hook, JSON sur l'entrée standard)",
     )
 
     return parser
+
+
+def fish_quote(text: str) -> str:
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def terminal_command(command: str, open_command: str) -> list[str]:
+    """Terminal avec `command` déjà tapée sur la ligne de commande, sans l'exécuter."""
+    from custos import machine
+
+    term = machine.terminal(open_command) or "foot"
+    shell = machine.shell(term) or "bash"
+    if shell == "fish":
+        return [term, "fish", "-C", f"commandline -- {fish_quote(command)}"]
+    # Autres shells : pas de ligne pré-remplie, on l'affiche et on la copie.
+    script = f"printf '%s\\n\\n' {shlex.quote(command)} '(copiée : colle-la pour la lancer)'; exec {shell}"
+    return [term, "sh", "-c", script]
 
 
 def ancestors(pid: int, limit: int = 64) -> list[int]:
@@ -129,6 +153,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except ipc.DaemonNotRunning:
                 pass  # appelé après chaque commande : silencieux si Custos ne tourne pas
+        elif args.subcommand == "terminal":
+            from custos.config import load
+            from custos.context import clipboard
+
+            argv = terminal_command(args.command, load().claude.open_command)
+            if argv[1] != "fish":
+                clipboard.copy(args.command)
+            subprocess.Popen(argv, start_new_session=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("Terminal ouvert : la commande y est prête, à valider par l'utilisateur.")
         elif args.subcommand == "agent-event":
             # Appelé par Claude Code : jamais d'erreur, même sans daemon ou entrée illisible.
             message = agent_event(sys.stdin.read(MAX_OUTPUT))

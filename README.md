@@ -11,6 +11,10 @@ Mascotte gardienne pour Hyprland, propulsée par Claude : elle veille sur ton é
 - Claude est appelé via `claude -p` : ça utilise ton abonnement Claude, pas de clé API.
 - Claude n'est appelé que quand **tu** le demandes. Les réactions automatiques
   (une commande qui échoue, par exemple) restent locales.
+- Custos **agit** sur ton PC avec les outils de Claude Code, en mode auto : il lit,
+  lance des commandes, modifie ta config, ouvre une page… et ne te demande ton accord
+  que pour ce que le mode auto juge sensible. Jamais de `sudo` ni de lecture de tes
+  secrets (`tools = false` dans `[claude]` pour qu'il réponde seulement).
 - Certaines fenêtres ne sont jamais lues : une appli entière (`blocked_classes`, ton
   gestionnaire de mots de passe) ou une page précise d'après son titre (`blocked_titles`,
   ta banque ou la navigation privée dans le navigateur).
@@ -75,8 +79,16 @@ Entrée, et seule la réponse s'affiche, au fil de l'eau. « Répondre… » pos
 de suivi (la réponse affichée est remplacée, Claude garde le fil). Rouvrir la carte dans
 les 10 minutes reprend la conversation ; ＋ en démarre une nouvelle. ↗ (ou `custos open`)
 ouvre la conversation complète en grand : Claude Code dans un terminal, avec
-`claude --resume`. Un clic en dehors de la carte, Échap ou ✕ la ferment (et arrêtent une
-réponse en cours).
+`claude --resume`. Un clic en dehors de la carte, Échap ou ✕ la ferment.
+
+Quand il agit (« mon PC a crashé, trouve et règle le problème », « ouvre-moi le
+Catéchisme sur les anges »), la carte montre l'étape en cours (`▶ journalctl -b -1`), puis
+seulement sa conclusion ; le détail de ce qu'il a fait est dans la conversation en grand (↗).
+Une action sensible attend ton accord dans la carte : **Autoriser**, **Toujours** (pour cette
+conversation) ou **Refuser**. Tu peux fermer la carte pendant qu'il travaille : il continue,
+la mascotte affiche ✋ s'il a besoin de toi et ✅ quand il a fini, et un clic rouvre la carte
+où il en est. ■ l'arrête. Pour une commande en root, il t'ouvre un terminal avec la commande
+prête (`custos terminal '…'`) : c'est toi qui la valides et tapes ton mot de passe.
 
 Custos détecte ta machine (distribution, Hyprland, terminal, shell, caelestia, yay…) pour
 te donner des commandes qui s'y appliquent. Son caractère, et ce qu'il doit savoir de toi,

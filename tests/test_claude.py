@@ -59,3 +59,44 @@ def test_parse_session() -> None:
     assert claude.parse_session(init) == "abc-123"
     assert claude.parse_session(json.dumps({"type": "system", "subtype": "status"})) is None
     assert claude.parse_session("pas du json") is None
+
+
+def test_agent_command_has_tools_in_auto_mode() -> None:
+    cmd = claude.build_command(ClaudeConfig(), agent=True)
+    assert "--tools" not in cmd
+    assert cmd[cmd.index("--permission-mode") + 1] == "auto"
+    assert cmd[cmd.index("--permission-prompt-tool") + 1] == "stdio"
+    assert "Bash(sudo *)" in cmd and "Read(~/.ssh/**)" in cmd
+    # Les listes d'options s'arrêtent avant le prompt système.
+    assert cmd[cmd.index("--system-prompt") - 1] == claude.DISALLOWED_TOOLS[-1]
+
+
+def test_describe_tool_steps() -> None:
+    home = str(Path.home())
+    assert claude.describe_tool("Bash", {"command": "journalctl -b -1\n| tail"}) == "▶ journalctl -b -1"
+    assert claude.describe_tool("Read", {"file_path": f"{home}/.config/x"}) == "lit ~/.config/x"
+    assert claude.describe_tool("WebSearch", {"query": "CEC anges"}) == "cherche sur le web : CEC anges"
+    assert claude.describe_tool("Inconnu", {}) == "Inconnu"
+
+
+def test_parse_tools_from_assistant_message() -> None:
+    line = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "Je regarde."},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "uptime"}},
+    ]}})
+    assert claude.parse_tools(line) == ["▶ uptime"]
+    assert claude.parse_tools(json.dumps({"type": "user"})) == []
+
+
+def test_permission_request_and_responses() -> None:
+    line = json.dumps({"type": "control_request", "request_id": "r1", "request": {
+        "subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "rm -rf ~/x"}}})
+    request_id, permission = claude.parse_permission(line)
+    assert request_id == "r1" and permission.description == "rm -rf ~/x"
+
+    allow = claude.permission_response("r1", permission, claude.ALWAYS)["response"]
+    assert allow["request_id"] == "r1"
+    assert allow["response"] == {"behavior": "allow", "updatedInput": {"command": "rm -rf ~/x"}}
+    deny = claude.permission_response("r1", permission, claude.DENY)["response"]["response"]
+    assert deny["behavior"] == "deny"
+    assert claude.parse_permission(json.dumps({"type": "control_request", "request": {}})) is None

@@ -26,6 +26,10 @@ class FakeUI:
         self.toggles = 0
         self.reopened: list[tuple[str, str, str]] = []
         self.monitor_changes = 0
+        self.statuses: list[str] = []
+        self.resets = 0
+        self.permissions: list[str | None] = []
+        self.progress: list[tuple] = []
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
@@ -66,6 +70,21 @@ class FakeUI:
     def monitors_changed(self) -> None:
         self.monitor_changes += 1
 
+    def set_status(self, text: str) -> None:
+        self.statuses.append(text)
+
+    def reset_answer(self) -> None:
+        self.resets += 1
+
+    def ask_permission(self, description: str) -> None:
+        self.permissions.append(description)
+
+    def permission_done(self) -> None:
+        self.permissions.append(None)
+
+    def show_progress(self, question: str, status: str, answer: str, permission: str) -> None:
+        self.progress.append((question, status, answer, permission))
+
 
 @pytest.fixture(autouse=True)
 def no_machine(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,7 +104,8 @@ def prompts(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list | None]]:
     sent: list[tuple[str, list | None]] = []
 
     def fake_ask(
-        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None
+        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None,
+        **_kwargs,
     ):
         sent.append((prompt, images))
         if on_session:
@@ -140,7 +160,8 @@ def test_follow_up_resumes_claude_session(monkeypatch, ui) -> None:
     calls = []
 
     def fake_ask(
-        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None
+        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None,
+        **_kwargs,
     ):
         calls.append((prompt, resume))
         on_session("session-1")
@@ -212,7 +233,7 @@ def test_claude_error_is_shown_and_lock_released(monkeypatch, ui) -> None:
     assert len(ui.errors) == 2
 
 
-def test_second_question_while_busy_is_refused(monkeypatch, ui) -> None:
+def test_shortcut_while_busy_shows_progress(monkeypatch, ui) -> None:
     started, release = threading.Event(), threading.Event()
 
     def slow_ask(*a, **k):
@@ -226,13 +247,13 @@ def test_second_question_while_busy_is_refused(monkeypatch, ui) -> None:
     first = threading.Thread(target=d.handle, args=({"type": "ask", "question": "1"},))
     first.start()
     started.wait(2)
-    d.handle({"type": "ask", "question": "2"})
-    d.answer("3")
+    d.handle({"type": "ask", "question": "2"})  # la carte reprend là où il en est
+    d.answer("3")  # une autre question pendant qu'il travaille : refusée
     release.set()
     first.join(2)
     assert ui.answers == ["fini"]
-    assert len(ui.errors) == 2
-    assert all("déjà" in e for e in ui.errors)
+    assert ui.progress == [("1", "", "", "")]
+    assert len(ui.errors) == 1 and "déjà" in ui.errors[0]
 
 
 def test_submit_answers_in_background(monkeypatch, ui, prompts) -> None:
@@ -566,29 +587,52 @@ def test_plus_button_starts_new_conversation(monkeypatch, ui, prompts) -> None:
     assert d.session.claude_session is None
 
 
-def test_closing_interrupts_answer(monkeypatch, ui) -> None:
-    started = threading.Event()
-
+def endless(started: threading.Event):
     def endless_ask(
-        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None
+        prompt, config, images=None, system_prompt="", resume=None, on_session=None, cancel=None,
+        **_kwargs,
     ):
         on_session("session-1")
         started.set()
         yield "Il était une fois"
         cancel.wait(2)  # comme claude.ask : s'arrête quand on annule
 
-    monkeypatch.setattr(claude, "ask", endless_ask)
+    return endless_ask
+
+
+def test_stop_button_interrupts_answer(monkeypatch, ui) -> None:
+    started = threading.Event()
+    monkeypatch.setattr(claude, "ask", endless(started))
     use_context(monkeypatch, Context(window=WINDOW))
     d = daemon.Daemon(Config(), ui)
     d.handle({"type": "ask"})
     worker = threading.Thread(target=d.answer, args=("raconte",))
     worker.start()
     started.wait(2)
-    d.close_bubble()
+    d.stop()
     worker.join(2)
     assert not worker.is_alive()
-    assert ui.answers == []  # pas de réponse affichée après la fermeture
+    assert ui.answers == ["Il était une fois"]  # ce qu'il avait déjà écrit
     assert ui.states[-1] is MascotState.IDLE
+
+
+def test_closing_keeps_working_then_badge_and_click_reopens(monkeypatch, ui) -> None:
+    def ask_then_close(*_a, on_session=None, **_k):
+        on_session("session-1")
+        yield "Bon"
+        d.close_bubble()  # tu fermes la carte pendant qu'il répond
+        yield "jour !"
+
+    monkeypatch.setattr(claude, "ask", ask_then_close)
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("salut ?")
+    assert ui.answers == ["Bonjour !"]
+    assert ui.notices[-1] == daemon.ANSWER_READY
+    d.open_from_mascot()
+    assert ui.reopened == [("", "salut ?", "Bonjour !")]
+    assert ui.notices[-1] is None
 
 
 def test_closing_without_answer_forgets_conversation(monkeypatch, ui, tmp_path) -> None:
@@ -828,3 +872,111 @@ def test_cli_agent_event_from_hook_input() -> None:
     assert message["pids"] and all(isinstance(p, int) for p in message["pids"])
     assert cli.agent_event("pas du json") is None
     assert cli.agent_event('{"hook_event_name": "Stop"}') is None
+
+
+def agent_ask(steps):
+    """Faux Claude en mode agent : `steps` mêle du texte, des étapes et des permissions."""
+    def ask(prompt, config, *, on_session=None, on_tool=None, on_permission=None, agent=False,
+            **_kwargs):
+        on_session("session-1")
+        for kind, value in steps:
+            if kind == "text":
+                yield value
+            elif kind == "tool":
+                on_tool(value)
+            else:
+                yield f"[{on_permission(claude.Permission('Bash', {'command': value}))}]"
+    return ask
+
+
+def answer_permission_when_asked(d, ui, choice) -> threading.Thread:
+    def run() -> None:
+        for _ in range(200):
+            if d.work and d.work.permission:
+                d.permission_answer(choice)
+                return
+            threading.Event().wait(0.01)
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread
+
+
+def test_agent_keeps_only_conclusion(monkeypatch, ui) -> None:
+    monkeypatch.setattr(claude, "ask", agent_ask(
+        [("text", "Je regarde le journal."), ("tool", "▶ journalctl -b -1"), ("text", "C'est le PSR.")]
+    ))
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "question": "pourquoi ça a crashé ?"})
+    assert ui.statuses == ["▶ journalctl -b -1"] and ui.resets == 1
+    assert ui.answers == ["C'est le PSR."]
+
+
+def test_sensitive_action_waits_for_answer_and_always_is_remembered(monkeypatch, ui) -> None:
+    monkeypatch.setattr(claude, "ask", agent_ask([("permission", "rm -rf ~/x"), ("permission", "rm -rf ~/x")]))
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    helper = answer_permission_when_asked(d, ui, claude.ALWAYS)
+    d.handle({"type": "ask", "question": "nettoie"})
+    helper.join(2)
+    assert ui.permissions == ["rm -rf ~/x", None]  # demandé une seule fois
+    assert ui.answers == ["[always][allow]"]
+
+
+def test_closed_card_shows_waiting_badge_and_click_shows_request(monkeypatch, ui) -> None:
+    monkeypatch.setattr(claude, "ask", agent_ask([("tool", "▶ ls"), ("permission", "rm x")]))
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    worker = threading.Thread(target=d.handle, args=({"type": "ask", "question": "range"},))
+    worker.start()
+    for _ in range(200):
+        if d.work and d.work.permission:
+            break
+        threading.Event().wait(0.01)
+    d.close_bubble()
+    assert ui.notices[-1] == daemon.CUSTOS_WAITING
+    d.open_from_mascot()
+    assert ui.progress[-1] == ("range", "▶ ls", "", "rm x")
+    d.permission_answer(claude.DENY)
+    worker.join(2)
+    assert ui.answers == ["[deny]"]
+
+
+def test_stop_while_waiting_denies(monkeypatch, ui) -> None:
+    monkeypatch.setattr(claude, "ask", agent_ask([("permission", "rm x")]))
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    worker = threading.Thread(target=d.handle, args=({"type": "ask", "question": "range"},))
+    worker.start()
+    for _ in range(200):
+        if d.work and d.work.permission:
+            break
+        threading.Event().wait(0.01)
+    d.stop()
+    worker.join(2)
+    assert not worker.is_alive()
+
+
+def test_no_tools_without_card_or_when_disabled(monkeypatch, ui) -> None:
+    used: list[bool] = []
+
+    def ask(prompt, config, *, agent=False, on_session=None, **_kwargs):
+        used.append(agent)
+        yield "ok"
+
+    monkeypatch.setattr(claude, "ask", ask)
+    use_context(monkeypatch, Context(window=WINDOW))
+    daemon.Daemon(Config(), ui).handle({"type": "ask", "question": "?"})
+    ui.interactive = False  # repli par notifications : personne pour valider une action
+    daemon.Daemon(Config(), ui).handle({"type": "ask", "question": "?"})
+    config = Config()
+    config.claude.tools = False
+    ui.interactive = True
+    daemon.Daemon(config, ui).handle({"type": "ask", "question": "?"})
+    assert used == [True, False, False]
+
+
+def test_cli_terminal_prefills_fish_command() -> None:
+    argv = cli.terminal_command("sudo rm 'a b'", "foot claude")
+    if argv[1] == "fish":
+        assert argv == ["foot", "fish", "-C", "commandline -- 'sudo rm \\'a b\\''"]

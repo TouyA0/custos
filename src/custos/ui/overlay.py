@@ -53,8 +53,11 @@ BADGE_ICONS = {
     "screenshot": "🖼\ufe0f",
     "agent-waiting": "✋",  # une session Claude Code attend ta permission
     "agent-done": "✅",  # une session Claude Code a fini
+    "custos-waiting": "✋",  # carte fermée : Custos attend ton accord pour une action
+    "answer-ready": "✅",  # carte fermée : Custos a fini
 }
-PERSISTENT_BADGES = {"agent-waiting", "agent-done"}  # restent jusqu'à ce que tu ailles voir
+# Restent jusqu'à ce que tu ailles voir.
+PERSISTENT_BADGES = {"agent-waiting", "agent-done", "custos-waiting", "answer-ready"}
 
 FOLLOW_INTERVAL = 200  # ms entre deux lectures de la position de la fenêtre accrochée
 DRAG_THRESHOLD = 6  # pixels : en dessous, c'est un clic
@@ -239,6 +242,8 @@ class MascotOverlay:
             on_close=lambda: app.on_close(),
             on_open_full=lambda: app.on_open_full(),
             on_new=lambda: app.on_new(),
+            on_stop=lambda: app.on_stop(),
+            on_permission=lambda choice: app.on_permission(choice),
         )
 
         self.canvas = round(config.size * (1 + 2 * PADDING))
@@ -618,6 +623,8 @@ class OverlayUI:
         ).start()
         self.app.on_attached = daemon.set_attached
         self.app.on_monitor = daemon.set_monitor
+        self.app.on_stop = daemon.stop
+        self.app.on_permission = daemon.permission_answer
         self.app.on_open_full = daemon.open_full
         # Lire le contexte appelle hyprctl et wl-paste : hors du thread GTK.
         self.app.on_new = lambda: threading.Thread(target=daemon.new_conversation, daemon=True).start()
@@ -669,6 +676,23 @@ class OverlayUI:
     def monitors_changed(self) -> None:
         self._on_gtk_thread(lambda overlay: overlay.monitors_changed())
 
+    def set_status(self, text: str) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.set_status(text))
+
+    def reset_answer(self) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.reset_answer())
+
+    def ask_permission(self, description: str) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.ask_permission(description))
+
+    def permission_done(self) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.permission_done())
+
+    def show_progress(self, question: str, status: str, answer: str, permission: str) -> None:
+        self._on_gtk_thread(
+            lambda overlay: overlay.bubble.show_progress(question, status, answer, permission)
+        )
+
 
 class MascotApp(Gtk.Application):
     def __init__(self, config: MascotConfig) -> None:
@@ -684,6 +708,8 @@ class MascotApp(Gtk.Application):
         self.on_new: Callable[[], None] = lambda: None
         self.on_attached: Callable[[hyprland.ActiveWindow | None], None] = lambda window: None
         self.on_monitor: Callable[[str], None] = lambda name: None
+        self.on_stop: Callable[[], None] = lambda: None
+        self.on_permission: Callable[[str], None] = lambda choice: None
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, app: Gtk.Application) -> None:
