@@ -15,7 +15,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Protocol
 
-from custos import claude, context, history, ipc, machine, system, terminal, watch
+from custos import claude, context, history, ipc, machine, quota, system, terminal, watch
 from custos.config import Config, load, load_persona
 from custos.context import Context, clipboard, hyprland, images, privacy
 from custos.states import MascotState
@@ -72,6 +72,7 @@ class UI(Protocol):
     def reopen(self, summary: str, question: str, answer: str) -> None: ...
     def set_history(self, exchanges: list[tuple[str, str]]) -> None: ...
     def set_attachments(self, count: int) -> None: ...
+    def set_quota(self, quota: quota.Quota | None) -> None: ...
     def set_hidden(self, hidden: bool) -> None: ...
     def attach(self, window: hyprland.ActiveWindow) -> None: ...
     def detach(self) -> None: ...
@@ -680,6 +681,7 @@ class Daemon:
                 on_tool=on_tool,
                 on_permission=lambda permission: self._ask_permission(session, work, permission),
                 model=model,
+                on_rate_limit=self._on_rate_limit,
             ):
                 with self._lock:
                     work.chunks.append(chunk)
@@ -770,6 +772,18 @@ class Daemon:
         if not self.card_open:
             # Finie carte fermée : ✅ jusqu'à ce que tu cliques pour la lire.
             self.notice = Notice(ANSWER_READY, time.monotonic())
+
+    def _on_rate_limit(self, info: dict) -> None:
+        """Quota annoncé par Claude Code pendant la réponse : pour l'info-bulle de l'icône."""
+        current = quota.Quota.from_event(info)
+        if current is None:
+            return
+        quota.save(current)
+        self.ui.set_quota(current)
+
+    def show_saved_quota(self) -> None:
+        """Au démarrage : le dernier quota connu, en attendant la prochaine question."""
+        self.ui.set_quota(quota.load())
 
     def _ask_permission(self, session: Session, work: Work, permission: claude.Permission) -> str:
         """Action sensible : on attend ta réponse dans la carte (badge orange sur la mascotte si elle
@@ -1036,6 +1050,7 @@ def run() -> int:
                 target=hyprland.listen, args=(daemon.on_hyprland_event, stop_events), daemon=True
             ).start()
             daemon.on_hyprland_event("fullscreen")  # déjà en plein écran au démarrage ?
+            daemon.show_saved_quota()
             _serve_with_gtk(server, app)
     finally:
         stop_events.set()

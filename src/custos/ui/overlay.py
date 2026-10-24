@@ -760,6 +760,14 @@ class OverlayUI:
 
         GLib.idle_add(update)
 
+    def set_quota(self, quota) -> None:
+        def update() -> bool:
+            if self.app.tray:
+                self.app.tray.set_quota(quota)
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(update)
+
 
 class MascotApp(Gtk.Application):
     def __init__(self, config: MascotConfig) -> None:
@@ -787,9 +795,13 @@ class MascotApp(Gtk.Application):
         self.connect("activate", self._on_activate)
 
     def _menu(self) -> list:
-        """Menu de l'icône : celui du daemon, puis ranger la mascotte et quitter."""
+        """Menu de l'icône : le quota (grisé, juste à lire), celui du daemon, puis ranger la
+        mascotte et quitter."""
         stowed = self.overlay is not None and self.overlay.stowed
+        usage = self.tray.quota.lines() if self.tray and self.tray.quota else []
         return [
+            *((line, None) for line in usage),
+            *([None] if usage else []),
             *self.on_menu(),
             None,
             ("Faire réapparaître la mascotte" if stowed else "Ranger la mascotte", self._toggle_stowed),

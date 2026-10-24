@@ -300,6 +300,18 @@ def permission_response(request_id: str, permission: Permission, choice: str) ->
     }
 
 
+def parse_rate_limit(line: str) -> dict | None:
+    """Quota annoncé par Claude Code (`rate_limit_event`) : usage des fenêtres de 5 h, 7 j…"""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "rate_limit_event":
+        return None
+    info = event.get("rate_limit_info")
+    return info if isinstance(info, dict) else None
+
+
 def _is_result(line: str) -> bool:
     try:
         return json.loads(line).get("type") == "result"
@@ -319,6 +331,7 @@ def ask(
     on_tool: Callable[[str], None] | None = None,
     on_permission: Callable[[Permission], str] | None = None,
     model: str | None = None,
+    on_rate_limit: Callable[[dict], None] | None = None,
 ) -> Iterator[str]:
     """Envoie `prompt` à Claude et renvoie la réponse morceau par morceau.
 
@@ -367,6 +380,9 @@ def ask(
             process.stdin.write(json.dumps(message) + "\n")
             process.stdin.flush()
             for line in process.stdout:
+                rate_limit = parse_rate_limit(line)
+                if rate_limit and on_rate_limit:
+                    on_rate_limit(rate_limit)
                 session = parse_session(line)
                 if session and on_session:
                     on_session(session)

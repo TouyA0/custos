@@ -68,7 +68,9 @@ autre fenêtre pour changer, ou lâche-la ailleurs (ou `custos detach`) pour la 
 Une icône dans la barre (caelestia) permet de la ranger : clic pour la cacher ou la faire
 réapparaître, clic droit pour lui poser une question. Au survol, son menu propose aussi
 tes conversations récentes, tes sessions Claude Code en cours (un clic pour y aller) et
-de quitter Custos. Aussi via le clic droit sur la mascotte
+de quitter Custos. Tout en haut de ce menu : ton quota Claude (fenêtres de 5 h et de 7 jours,
+et quand elles se remettent à zéro), relevé à chaque question sans appel en plus ; près de la
+limite des 5 h, il te suggère `/vite`. Aussi via le clic droit sur la mascotte
 (« Se ranger dans la barre ») ou `custos toggle`. Elle reste rangée d'une session à l'autre.
 Quand quelque chose t'attend, l'icône le montre même si la mascotte est rangée, cachée par
 un plein écran ou sur l'autre écran : pastille orange quand Custos ou une session Claude

@@ -324,6 +324,7 @@ class Tray:
         except (OSError, GLib.Error) as exc:
             log.warning("icônes de la barre non écrites (%s) : pas de pastille dans caelestia", exc)
             self.icon_dir = None
+        self.quota = None  # dernier quota connu (voir quota.Quota), dans l'info-bulle
         self.alert: str | None = None  # WAITING, DONE ou None
         self.alert_text = ""
         self.name = f"org.kde.StatusNotifierItem-{os.getpid()}-1"
@@ -348,6 +349,25 @@ class Tray:
             except GLib.Error as exc:
                 log.warning("impossible de mettre à jour l'icône : %s", exc.message)
                 return
+
+    def set_quota(self, quota) -> None:
+        """Nouveau relevé du quota : en haut du menu (et dans l'info-bulle, pour les barres
+        qui l'affichent)."""
+        self.quota = quota
+        if self.bus is None:
+            return
+        self.refresh_menu()
+        try:
+            self.bus.emit_signal(None, ITEM_PATH, "org.kde.StatusNotifierItem", "NewToolTip", None)
+        except GLib.Error as exc:
+            log.warning("impossible de mettre à jour l'info-bulle : %s", exc.message)
+
+    def tooltip(self) -> str:
+        """Ce qui t'attend (ou à quoi servent les clics), puis le quota, recalculé à chaque
+        survol : « jusqu'à 17:30 » devient « remis à zéro » une fois l'heure passée."""
+        text = self.alert_text or TOOLTIP
+        usage = self.quota.describe() if self.quota else ""
+        return f"{text}\n{usage}" if usage else text
 
     def refresh_menu(self) -> None:
         """Reconstruit le menu et prévient la barre s'il a changé."""
@@ -426,7 +446,7 @@ class Tray:
             "IconPixmap": GLib.Variant("a(iiay)", [] if self.icon_dir else self.icons[self.alert]),
             "AttentionIconPixmap": GLib.Variant("a(iiay)", [] if self.icon_dir else self.icons[self.alert]),
             "ToolTip": GLib.Variant(
-                "(sa(iiay)ss)", ("", [], "Custos", self.alert_text or TOOLTIP)
+                "(sa(iiay)ss)", ("", [], "Custos", self.tooltip())
             ),
             "ItemIsMenu": GLib.Variant("b", False),
             "Menu": GLib.Variant("o", MENU_PATH),

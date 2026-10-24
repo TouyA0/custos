@@ -28,6 +28,7 @@ class FakeUI:
         self.reopened: list[tuple[str, str, str]] = []
         self.histories: list[list[tuple[str, str]]] = []
         self.attachments: list[int] = []
+        self.quotas: list = []
         self.monitor_changes = 0
         self.statuses: list[str] = []
         self.resets = 0
@@ -73,6 +74,9 @@ class FakeUI:
 
     def set_attachments(self, count: int) -> None:
         self.attachments.append(count)
+
+    def set_quota(self, quota) -> None:
+        self.quotas.append(quota)
 
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self.reopened.append((summary, question, answer))
@@ -1389,3 +1393,22 @@ def test_tray_menu_lists_problems_to_look_at(monkeypatch, ui) -> None:
         "Poser une question", None, "À regarder", "service utilisateur en échec : sync.service", None,
     ]
     assert menu[3][2] == ("alert", "#d9a33a")
+
+
+
+def test_quota_from_answer_is_saved_and_shown(monkeypatch, ui, tmp_path) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    monkeypatch.setattr(daemon.quota, "path", lambda: tmp_path / "quota.json")
+    info = {"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.5, "resetsAt": 2e9}}}
+
+    def answering(*_args, on_rate_limit=None, **_kwargs):
+        on_rate_limit(info)
+        yield "ok"
+
+    monkeypatch.setattr(claude, "ask", answering)
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask", "question": "salut"})
+    assert ui.quotas[-1].windows[0].utilization == 0.5
+    ui.quotas.clear()
+    daemon.Daemon(Config(), ui).show_saved_quota()  # après un redémarrage
+    assert ui.quotas[-1].windows[0].name == "five_hour"
