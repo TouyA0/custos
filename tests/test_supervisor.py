@@ -92,14 +92,32 @@ def test_sigterm_stops_daemon_and_supervisor(dirs: Path, monkeypatch: pytest.Mon
 
 def test_second_supervisor_refused(dirs: Path) -> None:
     supervisor.state_dir().mkdir(parents=True)
-    supervisor.pid_path().write_text(str(supervisor.os.getpid()))  # processus vivant
+    supervisor.write_pid()  # processus vivant
     assert supervisor.supervise(counting_child(dirs, [0]), backoff=0) == 1
     assert not (dirs / "runs").exists()
 
 
 def test_stale_pid_file_is_ignored(dirs: Path) -> None:
-    supervisor.pid_path().write_text("999999999")
+    supervisor.pid_path().write_text("999999999 12345")
     assert supervisor.read_pid() is None
+
+
+def test_pid_reused_by_another_process_is_ignored(dirs: Path) -> None:
+    pid = supervisor.os.getpid()
+    supervisor.write_pid()
+    assert supervisor.read_pid() == pid
+    # Même PID, autre processus : son instant de démarrage diffère.
+    supervisor.pid_path().write_text(f"{pid} {int(supervisor.start_time(pid)) - 1}")
+    assert supervisor.read_pid() is None
+
+
+def test_old_pid_file_checks_the_command(dirs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pid = supervisor.os.getpid()
+    supervisor.pid_path().write_text(str(pid))
+    assert supervisor.read_pid() is None  # pytest n'est pas `custos daemon`
+    cmdline = b"/home/q/custos/.venv/bin/python\0-m\0custos\0daemon\0"
+    monkeypatch.setattr(supervisor.Path, "read_bytes", lambda self: cmdline)
+    assert supervisor.read_pid() == pid
 
 
 def test_big_log_is_rotated(dirs: Path) -> None:

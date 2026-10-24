@@ -89,14 +89,45 @@ def worker_env() -> dict[str, str]:
     return env
 
 
-def read_pid() -> int | None:
-    """PID du superviseur en cours, ou None (fichier absent ou processus disparu)."""
+def start_time(pid: int) -> str | None:
+    """Instant de démarrage du processus (champ 22 de /proc/<pid>/stat), ou None s'il n'existe
+    pas : avec le PID, il désigne un processus sans confusion possible."""
     try:
-        pid = int(pid_path().read_text())
-        os.kill(pid, 0)
+        # « pid (nom) état … » : le nom peut contenir des espaces, on part de la fin.
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _is_custos(pid: int) -> bool:
+    """Le processus est un superviseur Custos (`custos daemon`, `python -m custos daemon`)."""
+    try:
+        args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    return b"daemon" in args and any(Path(arg.decode(errors="replace")).name == "custos" for arg in args)
+
+
+def write_pid() -> None:
+    pid = os.getpid()
+    pid_path().write_text(f"{pid} {start_time(pid)}")
+
+
+def read_pid() -> int | None:
+    """PID du superviseur en cours, ou None (fichier absent ou processus disparu).
+
+    Le PID d'un Custos arrêté sans nettoyer (plantage, coupure) peut être repris par un autre
+    processus : l'instant de démarrage noté à côté doit aussi correspondre.
+    """
+    try:
+        pid, *rest = pid_path().read_text().split()
+        pid = int(pid)
     except (OSError, ValueError):
         return None
-    return pid
+    if rest:
+        return pid if start_time(pid) == rest[0] else None
+    # Ancien fichier, PID seul (Custos lancé avant cette version) : on vérifie sa commande.
+    return pid if _is_custos(pid) else None
 
 
 def supervise(command: list[str] | None = None, backoff: float = 1.0) -> int:
@@ -106,7 +137,7 @@ def supervise(command: list[str] | None = None, backoff: float = 1.0) -> int:
         return 1
 
     command = command or worker_command()
-    pid_path().write_text(str(os.getpid()))
+    write_pid()
     stopping = threading.Event()
     child: subprocess.Popen | None = None
 
