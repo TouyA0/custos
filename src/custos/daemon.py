@@ -725,6 +725,7 @@ def run() -> int:
     # Ses lignes de log partent sur stderr, que le superviseur redirige vers le fichier de log.
     setup_logging("daemon", to_file=False)
     config = load()
+    _report_config_problems(config)
 
     handler: list = []  # rempli une fois le daemon créé
     try:
@@ -764,6 +765,18 @@ def run() -> int:
         server.server_close()
         log.info("arrêté")
     return 0
+
+
+def _report_config_problems(config: Config) -> None:
+    """Options ignorées dans config.toml : dans le log, et une notification pour le savoir."""
+    if not config.problems:
+        return
+    for problem in config.problems:
+        log.warning("config : %s", problem)
+    from custos.ui.notify import notify
+
+    shown = "\n".join(config.problems[:5]) + ("\n…" if len(config.problems) > 5 else "")
+    notify("Custos — config.toml", shown)
 
 
 def _start_watcher(config: Config, daemon: Daemon) -> watch.Watcher:

@@ -3,7 +3,7 @@
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 
@@ -90,22 +90,57 @@ class Config:
     shell: ShellConfig = field(default_factory=ShellConfig)
     notice: NoticeConfig = field(default_factory=NoticeConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
+    # Ce qui a été ignoré à la lecture (faute de frappe, mauvais type…) : signalé au démarrage.
+    problems: list[str] = field(default_factory=list)
+
+
+def _same_type(value, default) -> bool:
+    """`value` a le type de la valeur par défaut (un entier n'est pas un booléen)."""
+    if isinstance(default, bool) or isinstance(value, bool):
+        return type(value) is type(default)
+    if isinstance(default, list):
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
+    return isinstance(value, type(default))
+
+
+def _section(name: str, cls: type, data, problems: list[str]):
+    """Une section de la config : les clés inconnues ou mal typées sont ignorées (et notées)."""
+    section = cls()
+    if not isinstance(data, dict):
+        problems.append(f"[{name}] n'est pas une section : ignorée")
+        return section
+    known = {f.name for f in fields(cls)}
+    for key, value in data.items():
+        if key not in known:
+            problems.append(f"[{name}] {key} : option inconnue, ignorée")
+        elif not _same_type(value, default := getattr(section, key)):
+            problems.append(f"[{name}] {key} : valeur invalide, défaut gardé ({default!r})")
+        else:
+            setattr(section, key, value)
+    return section
 
 
 def load(path: Path | None = None) -> Config:
-    """Lit le fichier de config ; les valeurs absentes gardent leur défaut."""
+    """Lit le fichier de config ; les valeurs absentes gardent leur défaut.
+
+    Jamais d'exception : une erreur de syntaxe ou une option inconnue ne doit pas empêcher
+    Custos de démarrer. Ce qui a été ignoré est listé dans `problems`.
+    """
     path = path or config_path()
     if not path.exists():
         return Config()
 
-    with path.open("rb") as f:
-        data = tomllib.load(f)
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        return Config(problems=[f"{path.name} illisible ({exc}) : réglages par défaut"])
 
+    problems: list[str] = []
+    sections = {f.name: f.default_factory for f in fields(Config) if f.name != "problems"}
+    for name in sorted(data.keys() - sections.keys()):
+        problems.append(f"[{name}] : section inconnue, ignorée")
     return Config(
-        claude=ClaudeConfig(**data.get("claude", {})),
-        mascot=MascotConfig(**data.get("mascot", {})),
-        privacy=PrivacyConfig(**data.get("privacy", {})),
-        shell=ShellConfig(**data.get("shell", {})),
-        notice=NoticeConfig(**data.get("notice", {})),
-        agents=AgentsConfig(**data.get("agents", {})),
+        **{name: _section(name, cls, data.get(name, {}), problems) for name, cls in sections.items()},
+        problems=problems,
     )
