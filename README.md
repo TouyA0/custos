@@ -83,7 +83,9 @@ ouvre la conversation complète en grand : Claude Code dans un terminal, avec
 
 Dans la carte, tape `/` pour les commandes : `/h` (ou `/historique`) liste tes dernières
 conversations, `/h caté` les filtre, ↑ ↓ et Entrée en rouvrent une, prête pour la suite ;
-`/n` en commence une nouvelle (comme ＋) et `/g` ouvre la conversation en grand (comme ↗).
+`/vite …` pose cette question seulement avec Sonnet (plus rapide, moins de quota ; `fast_model`
+dans la config) ; `/n` en commence une nouvelle (comme ＋) et `/g` ouvre la conversation en
+grand (comme ↗).
 Une question qui commence par un chemin (`/etc/fstab c'est quoi ?`) reste une question.
 
 Quand il agit (« mon PC a crashé, trouve et règle le problème », « ouvre-moi le

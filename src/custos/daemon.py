@@ -18,6 +18,7 @@ from custos.config import Config, load, load_persona
 from custos.context import Context, clipboard, hyprland, privacy
 from custos.states import MascotState
 from custos.supervisor import EXIT_ALREADY_RUNNING, setup_logging
+from custos.ui import slash
 
 log = logging.getLogger(__name__)
 
@@ -495,6 +496,14 @@ class Daemon:
         session = self.session or Session(Context())
         self.session = session
         ctx = session.context
+        # `/vite …` : cette question seulement, avec le modèle rapide (fast_model).
+        model = None
+        parsed = slash.parse(question.strip())
+        if parsed and parsed[0].action == slash.FAST:
+            model, question = self.config.claude.fast_model, parsed[1]
+            if not question and not context.default_question(ctx):
+                self.ui.show_error("Écris ta question après /vite.")
+                return
         question = question.strip() or context.default_question(ctx) or ""
         if not question:
             self.ui.show_error("Écris ta question.")
@@ -512,15 +521,16 @@ class Daemon:
             prompt = question if resume else context.build_prompt(question, ctx)
             images = [ctx.screenshot] if ctx.screenshot and not resume else None
             log.info(
-                "question (sélection : %d car., capture : %s, suivi : %s, outils : %s)",
+                "question (sélection : %d car., capture : %s, suivi : %s, outils : %s, modèle : %s)",
                 len(ctx.selection),
                 "oui" if images else "non",
                 "oui" if resume else "non",
                 "oui" if agent else "non",
+                model or self.config.claude.model,
             )
             self.ui.set_state(MascotState.THINKING)
             self.card_open = True
-            self.ui.start_answer(question)
+            self.ui.start_answer(f"{question} · {short_model(model)}" if model else question)
             started = time.monotonic()
 
             def remember(session_id: str) -> None:
@@ -543,6 +553,7 @@ class Daemon:
                 agent=agent,
                 on_tool=on_tool,
                 on_permission=lambda permission: self._ask_permission(session, work, permission),
+                model=model,
             ):
                 work.chunks.append(chunk)
                 self.ui.append_answer(chunk)
@@ -661,6 +672,12 @@ class Daemon:
         output = (message.get("output") or "").rstrip()
         self.last_failure["output"] = output
         log.info("sortie de la commande reçue (%d car.)", len(output))
+
+
+def short_model(model: str) -> str:
+    """« claude-sonnet-5-5 » → « sonnet » : affiché à côté de la question."""
+    parts = model.removeprefix("claude-").split("-")
+    return parts[0] if parts else model
 
 
 def _later(delay: float, action, *args) -> None:

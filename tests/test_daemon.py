@@ -996,3 +996,29 @@ def test_open_history_reopens_conversation_for_follow_up(monkeypatch, ui, prompt
     assert prompts[-1][0] == "et saint Michel ?"  # suite de la session, sans contexte
     d.open_history("disparue")
     assert ui.errors == ["Je ne retrouve plus cette conversation."]
+
+
+def test_fast_command_uses_fast_model_for_this_question_only(monkeypatch, ui) -> None:
+    models: list = []
+
+    def ask(prompt, config, *, model=None, on_session=None, **_kwargs):
+        models.append((prompt, model))
+        on_session("session-1")
+        yield "ok"
+
+    monkeypatch.setattr(claude, "ask", ask)
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("/vite c'est quoi ls -la ?")
+    d.answer("et ls -lh ?")
+    assert models[0][1] == "claude-sonnet-5-5" and models[0][0].endswith("Question : c'est quoi ls -la ?")
+    assert models[1] == ("et ls -lh ?", None)  # la suivante : le modèle habituel
+    assert ui.questions == ["c'est quoi ls -la ? · sonnet", "et ls -lh ?"]
+    d.answer("/vite")
+    assert ui.errors == ["Écris ta question après /vite."]
+
+
+def test_short_model() -> None:
+    assert daemon.short_model("claude-sonnet-5-5") == "sonnet"
+    assert daemon.short_model("claude-haiku-5-5") == "haiku"

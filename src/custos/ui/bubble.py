@@ -558,10 +558,10 @@ class Bubble:
                 self._pick(row.get_index())
             return
         parsed = slash.parse(entry.get_text())
-        if parsed and parsed[0].action != slash.HISTORY:
+        if parsed and parsed[0].action in (slash.NEW, slash.OPEN):
             self._run(parsed[0].action)
             return
-        self.on_submit(entry.get_text())
+        self.on_submit(entry.get_text())  # `/vite …` compris : c'est une question (voir daemon)
 
     # --- commandes « / » ----------------------------------------------------------
 
@@ -619,8 +619,9 @@ class Bubble:
             self._run(value)
 
     def _run(self, action: str) -> None:
-        if action == slash.HISTORY:
-            self.entry.set_text("/h ")
+        if action in (slash.HISTORY, slash.FAST):
+            # Choisie dans la liste : la commande s'écrit, la suite est à taper.
+            self.entry.set_text("/h " if action == slash.HISTORY else "/vite ")
             self.entry.set_position(-1)
             return
         self.entry.set_text("")

@@ -141,12 +141,13 @@ def build_command(
     system_prompt: str = SYSTEM_PROMPT,
     resume: str | None = None,
     agent: bool = False,
+    model: str | None = None,
 ) -> list[str]:
     # Ni réglages, ni hooks, ni serveurs MCP de l'utilisateur. La session est enregistrée
     # pour les questions de suivi (--resume) et pour l'ouvrir en grand dans un terminal.
     command = [
         "claude", "-p",
-        "--model", config.model,
+        "--model", model or config.model,
         "--input-format", "stream-json",
         "--output-format", "stream-json",
         "--verbose",
@@ -275,6 +276,7 @@ def ask(
     agent: bool = False,
     on_tool: Callable[[str], None] | None = None,
     on_permission: Callable[[Permission], str] | None = None,
+    model: str | None = None,
 ) -> Iterator[str]:
     """Envoie `prompt` à Claude et renvoie la réponse morceau par morceau.
 
@@ -284,13 +286,14 @@ def ask(
     `agent` : avec les outils de Claude Code. `on_tool` reçoit chaque étape (le texte déjà
     reçu n'était alors qu'un commentaire, pas la réponse) ; `on_permission` décide d'une
     action sensible (ALLOW, ALWAYS ou DENY) et peut attendre ta réponse.
+    `model` : un autre modèle que celui de la config, pour cette question (`/vite`).
     """
     message = build_message(prompt, images)
     workdir = conversations_dir()
     workdir.mkdir(parents=True, exist_ok=True)
     try:
         process = subprocess.Popen(
-            build_command(config, system_prompt, resume, agent),
+            build_command(config, system_prompt, resume, agent, model),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

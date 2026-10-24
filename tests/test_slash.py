@@ -20,3 +20,9 @@ def test_completions() -> None:
     assert [c.name for c in slash.completions("/hi")] == ["historique"]
     assert slash.completions("/hx") == []
     assert slash.completions("/h caté") == []
+
+
+def test_fast_command() -> None:
+    command, rest = slash.parse("/vite c'est quoi ls -la ?")
+    assert command.action == slash.FAST and rest == "c'est quoi ls -la ?"
+    assert slash.parse("/v")[0].action == slash.FAST

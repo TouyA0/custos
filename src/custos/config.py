@@ -33,6 +33,7 @@ def load_persona(path: Path | None = None) -> str:
 @dataclass
 class ClaudeConfig:
     model: str = "claude-opus-5-5"
+    fast_model: str = "claude-sonnet-5-5"  # `/vite …` dans la carte : pour cette question seulement
     timeout: int = 120
     # Custos agit sur ton PC avec les outils de Claude Code (mode auto) ; false : il répond seulement.
     tools: bool = True

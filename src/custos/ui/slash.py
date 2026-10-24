@@ -1,13 +1,13 @@
 """Commandes « / » tapées dans la carte (sans GTK, testé).
 
-`/h caté` rouvre une conversation passée, `/n` en commence une nouvelle, `/g` ouvre la
-conversation en grand. Ce qui n'est pas une commande connue (`/etc/fstab c'est quoi ?`)
-reste une question ordinaire.
+`/h caté` rouvre une conversation passée, `/v …` pose une question avec le modèle rapide,
+`/n` commence une nouvelle conversation, `/g` l'ouvre en grand. Ce qui n'est pas une
+commande connue (`/etc/fstab c'est quoi ?`) reste une question ordinaire.
 """
 
 from dataclasses import dataclass
 
-HISTORY, NEW, OPEN = "history", "new", "open"
+HISTORY, FAST, NEW, OPEN = "history", "fast", "new", "open"
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class Command:
 
 COMMANDS = [
     Command("historique", "h", "rouvrir une conversation passée", HISTORY),
+    Command("vite", "v", "cette question avec un modèle plus rapide et économe", FAST),
     Command("nouveau", "n", "nouvelle conversation", NEW),
     Command("grand", "g", "ouvrir la conversation en grand", OPEN),
 ]

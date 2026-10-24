@@ -3,6 +3,8 @@
 [claude]
 # Appelé via `claude -p` : utilise ton abonnement, pas de clé API.
 model = "claude-opus-5-5"
+# `/vite …` dans la carte : cette question seulement avec ce modèle, plus rapide et économe.
+fast_model = "claude-sonnet-5-5"
 timeout = 120  # secondes, pour une simple réponse
 # Custos agit sur ton PC avec les outils de Claude Code (mode auto : il ne demande que pour
 # ce qui est sensible). false : il répond seulement, sans rien toucher.
