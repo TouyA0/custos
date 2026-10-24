@@ -27,6 +27,7 @@ class FakeUI:
         self.toggles = 0
         self.reopened: list[tuple[str, str, str]] = []
         self.histories: list[list[tuple[str, str]]] = []
+        self.attachments: list[int] = []
         self.monitor_changes = 0
         self.statuses: list[str] = []
         self.resets = 0
@@ -69,6 +70,9 @@ class FakeUI:
 
     def set_history(self, exchanges: list[tuple[str, str]]) -> None:
         self.histories.append(list(exchanges))
+
+    def set_attachments(self, count: int) -> None:
+        self.attachments.append(count)
 
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self.reopened.append((summary, question, answer))
@@ -1211,3 +1215,62 @@ def test_tray_menu_lists_recent_conversations_and_agents(monkeypatch, ui, agents
 def test_tray_menu_without_history_or_agents(monkeypatch, ui) -> None:
     monkeypatch.setattr(daemon.history, "search", lambda query, limit=8: [])
     assert [entry[0] for entry in daemon.Daemon(Config(), ui).tray_menu()] == ["Poser une question"]
+
+
+def test_pasted_image_goes_with_the_next_question(monkeypatch, ui, prompts, tmp_path) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    image = tmp_path / "jointe.png"
+    image.write_bytes(b"png")
+    monkeypatch.setattr(daemon.images, "prepare", lambda source: image)
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.add_image(tmp_path / "source.png")
+    assert ui.attachments[-1] == 1
+    d.answer("")  # Entrée sans texte : que vois-tu ?
+    prompt, sent = prompts[-1]
+    assert sent == [image] and "Je joins aussi 1 image" in prompt and "Que vois-tu" in prompt
+    assert ui.attachments[-1] == 0 and not image.exists()  # envoyée puis supprimée
+
+
+def test_image_in_follow_up(monkeypatch, ui, prompts, tmp_path) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    image = tmp_path / "jointe.png"
+    image.write_bytes(b"png")
+    monkeypatch.setattr(daemon.images, "prepare", lambda source: image)
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("salut")
+    d.add_image(tmp_path / "source.png")
+    d.answer("et ça ?")
+    prompt, sent = prompts[-1]
+    assert sent == [image] and prompt.startswith("Je joins aussi 1 image") and prompt.endswith("et ça ?")
+
+
+def test_dropped_image_opens_the_card(monkeypatch, ui, tmp_path) -> None:
+    image = tmp_path / "jointe.png"
+    monkeypatch.setattr(daemon.images, "prepare", lambda source: image)
+    asked: list[dict] = []
+    monkeypatch.setattr(daemon.Daemon, "ask", lambda self, message: asked.append(message))
+    source = tmp_path / "copie-du-navigateur.png"
+    source.write_bytes(b"png")
+    daemon.Daemon(Config(), ui).add_image(source, temporary=True)
+    assert asked == [{"type": "ask", "image": str(image), "image_kind": "dropped"}]
+    assert not source.exists()  # copie temporaire supprimée
+
+
+def test_unreadable_image_explains(monkeypatch, ui, tmp_path) -> None:
+    monkeypatch.setattr(daemon.images, "prepare", lambda source: None)
+    daemon.Daemon(Config(), ui).add_image(tmp_path / "notes.txt")
+    assert ui.errors == ["Je ne sais pas lire cette image."]
+
+
+def test_attachments_can_be_removed(monkeypatch, ui, tmp_path) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    image = tmp_path / "jointe.png"
+    image.write_bytes(b"png")
+    monkeypatch.setattr(daemon.images, "prepare", lambda source: image)
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.add_image(tmp_path / "source.png")
+    d.remove_attachments()
+    assert ui.attachments[-1] == 0 and not image.exists() and d.session.context.attachments == []

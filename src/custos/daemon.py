@@ -17,7 +17,7 @@ from typing import Protocol
 
 from custos import claude, context, history, ipc, machine, terminal, watch
 from custos.config import Config, load, load_persona
-from custos.context import Context, clipboard, hyprland, privacy
+from custos.context import Context, clipboard, hyprland, images, privacy
 from custos.states import MascotState
 from custos.supervisor import EXIT_ALREADY_RUNNING, setup_logging
 from custos.ui import slash
@@ -62,6 +62,7 @@ class UI(Protocol):
     def show_notice(self, kind: str | None) -> None: ...
     def reopen(self, summary: str, question: str, answer: str) -> None: ...
     def set_history(self, exchanges: list[tuple[str, str]]) -> None: ...
+    def set_attachments(self, count: int) -> None: ...
     def set_hidden(self, hidden: bool) -> None: ...
     def attach(self, window: hyprland.ActiveWindow) -> None: ...
     def detach(self) -> None: ...
@@ -233,6 +234,7 @@ class Daemon:
             return message["question"]
         self.card_open = True
         self.ui.set_history([])
+        self.ui.set_attachments(0)
         self.ui.open_prompt(self.session.summary, context.hint(ctx))
         return None
 
@@ -632,11 +634,13 @@ class Daemon:
         # reprennent la session Claude, qui a déjà tout ça : juste la question.
         resume = session.claude_session
         prompt = question if resume else context.build_prompt(question, ctx)
-        images = [ctx.screenshot] if ctx.screenshot and not resume else None
+        if resume and ctx.attachments:
+            prompt = f"{context.ATTACHMENT_NOTE.format(count=len(ctx.attachments))}\n\n{prompt}"
+        images = ctx.images(first=not resume) or None
         log.info(
-            "question (sélection : %d car., capture : %s, suivi : %s, outils : %s, modèle : %s)",
+            "question (sélection : %d car., images : %d, suivi : %s, outils : %s, modèle : %s)",
             len(ctx.selection),
-            "oui" if images else "non",
+            len(images or []),
             "oui" if resume else "non",
             "oui" if agent else "non",
             model or self.config.claude.model,
@@ -644,6 +648,7 @@ class Daemon:
         self.ui.set_state(MascotState.THINKING)
         self.card_open = True
         self.ui.set_history(session.exchanges)
+        self.ui.set_attachments(0)  # envoyées avec cette question
         self.ui.start_answer(f"{question} · {short_model(model)}" if model else question)
         return session, work, prompt, images, agent, model
 
@@ -755,6 +760,49 @@ class Daemon:
         agent = self.agents.get(session)
         if agent:
             self._go_to_agent(agent)
+
+    def add_image(self, source: Path, temporary: bool = False) -> None:
+        """Image collée dans la carte ou glissée sur la mascotte (hors du thread GTK).
+
+        Carte ouverte : jointe à ta prochaine question. Sinon, la carte s'ouvre avec elle.
+        `temporary` : `source` est une copie à supprimer (presse-papier, image glissée d'un
+        navigateur), pas un de tes fichiers.
+        """
+        image = images.prepare(source)
+        if temporary:
+            source.unlink(missing_ok=True)
+        if image is None:
+            self.ui.show_error("Je ne sais pas lire cette image.")
+            return
+        with self._lock:
+            if self.work:
+                image.unlink(missing_ok=True)
+                self.ui.show_error("Attends la fin de la réponse pour joindre une image.")
+                return
+            session = self.session
+            if self.card_open and session:
+                session.context.attachments.append(image)
+                self.ui.set_attachments(len(session.context.attachments))
+                log.info("image jointe (%d)", len(session.context.attachments))
+                return
+        self.ask({"type": "ask", "image": str(image), "image_kind": "dropped"})
+
+    def paste_image(self) -> None:
+        """Ctrl+V dans la carte avec une image dans le presse-papier."""
+        copy = clipboard.image_to_file()
+        if copy is None:
+            self.ui.show_error("Je n'arrive pas à lire l'image du presse-papier.")
+            return
+        self.add_image(copy, temporary=True)
+
+    @_locked
+    def remove_attachments(self) -> None:
+        """Clic sur l'icône d'image de la carte : les images jointes sont retirées."""
+        if self.session:
+            for path in self.session.context.attachments:
+                path.unlink(missing_ok=True)
+            self.session.context.attachments = []
+        self.ui.set_attachments(0)
 
     def run_in_terminal(self, command: str) -> None:
         """Clic sur une commande de la réponse : un terminal s'ouvre avec elle, prête à lancer."""

@@ -14,7 +14,10 @@ souris.) La carte peut ainsi changer de taille sans redimensionner de fenêtre.
 Toutes les méthodes s'exécutent dans le thread GTK.
 """
 
+import os
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 
 import gi
 
@@ -24,7 +27,7 @@ gi.require_version("Graphene", "1.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 
-from gi.repository import Gdk, Gio, GLib, Graphene, Gtk, Pango
+from gi.repository import Gdk, Gio, GLib, GObject, Graphene, Gtk, Pango
 from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.context import clipboard
@@ -137,6 +140,31 @@ window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
 THINKING_FRAMES = ["● ○ ○", "○ ● ○", "○ ○ ●"]
 
 
+def image_drop_target(on_image: Callable[[Path, bool], None]) -> Gtk.DropTarget:
+    """Accepte une image glissée : un fichier (gestionnaire de fichiers) ou une image
+    (navigateur). `on_image(chemin, temporaire)` : temporaire si c'est une copie à supprimer."""
+    target = Gtk.DropTarget.new(GObject.TYPE_NONE, Gdk.DragAction.COPY)
+    target.set_gtypes([Gdk.FileList, Gdk.Texture])
+
+    def dropped(_target, value, _x: float, _y: float) -> bool:
+        if isinstance(value, Gdk.FileList):
+            paths = [f.get_path() for f in value.get_files() if f.get_path()]
+            if not paths:
+                return False
+            on_image(Path(paths[0]), False)
+            return True
+        if isinstance(value, Gdk.Texture):
+            fd, name = tempfile.mkstemp(prefix="custos-", suffix=".png", dir=os.environ.get("XDG_RUNTIME_DIR"))
+            os.close(fd)
+            value.save_to_png(name)
+            on_image(Path(name), True)
+            return True
+        return False
+
+    target.connect("drop", dropped)
+    return target
+
+
 def _icon_button(label: str, tooltip: str, on_click: Callable[..., None], *extra_classes: str) -> Gtk.Button:
     button = Gtk.Button(label=label, tooltip_text=tooltip, valign=Gtk.Align.CENTER)
     button.add_css_class("icon")
@@ -159,8 +187,14 @@ class Bubble:
         on_history: Callable[[str], list[tuple[str, str, str]]] = lambda query: [],
         on_open_history: Callable[[str], None] = lambda session: None,
         on_run: Callable[[str], None] = lambda command: None,
+        on_paste_image: Callable[[], None] = lambda: None,
+        on_image: Callable[[Path, bool], None] = lambda path, temporary: None,
+        on_remove_attachments: Callable[[], None] = lambda: None,
     ) -> None:
         self.on_run = on_run  # ouvre une commande de la réponse dans un terminal
+        self.on_paste_image = on_paste_image  # Ctrl+V avec une image dans le presse-papier
+        self.on_remove_attachments = on_remove_attachments
+        self.attachments = 0  # images jointes à la prochaine question
         self.theme = LIGHT_THEME  # couleurs du code dans le texte (le reste : la feuille de style)
         self.on_history = on_history  # (session, quand, titre) des conversations trouvées
         self.on_open_history = on_open_history
@@ -203,6 +237,7 @@ class Bubble:
         click = Gtk.GestureClick(button=0)  # n'importe quel bouton
         click.connect("pressed", self._on_press)
         self.window.add_controller(click)
+        self.card.add_controller(image_drop_target(on_image))
 
         keys = Gtk.EventControllerKey()
         # Avant le champ de saisie : ↑ ↓ servent à choisir dans la liste des commandes.
@@ -264,6 +299,8 @@ class Bubble:
         self.entry = Gtk.Entry(placeholder_text="Demande à Custos…", hexpand=True)
         self.entry.set_margin_end(4)
         self.entry.connect("activate", self._on_activate)
+        # Images jointes : une petite icône dans le champ (un clic les retire), rien de plus.
+        self.entry.connect("icon-press", lambda *_args: self.on_remove_attachments())
         self.entry.connect("changed", lambda _entry: self._update_suggestions())
 
         self.suggestions = Gtk.ListBox(visible=False, selection_mode=Gtk.SelectionMode.BROWSE)
@@ -393,6 +430,22 @@ class Bubble:
         self._placement = placement
         if self.visible:
             self._apply_placement()
+
+    def set_attachments(self, count: int) -> None:
+        """Images jointes à la prochaine question : l'icône du champ, et Entrée sans texte
+        demande ce qu'il y voit."""
+        self.attachments = count
+        position = Gtk.EntryIconPosition.SECONDARY
+        if count:
+            self.entry.set_icon_from_icon_name(position, "image-x-generic-symbolic")
+            plural = "s" if count > 1 else ""
+            self.entry.set_icon_tooltip_text(position, f"{count} image{plural} jointe{plural} · clic : retirer")
+            self.entry.set_placeholder_text("Entrée : que vois-tu ?")
+        else:
+            self.entry.set_icon_from_icon_name(position, None)
+            if self.answer:
+                self.entry.set_placeholder_text("Répondre…")
+        self.entry.grab_focus()
 
     def set_history(self, exchanges: list[tuple[str, str]]) -> None:
         """Échanges précédents de la conversation, affichés au-dessus de la réponse."""
@@ -824,7 +877,7 @@ class Bubble:
             button.set_label("✓")
             GLib.timeout_add(COPIED_FEEDBACK, lambda: button.set_label("⧉") or GLib.SOURCE_REMOVE)
 
-    def _on_key(self, _controller, keyval: int, _keycode: int, _state: Gdk.ModifierType) -> bool:
+    def _on_key(self, _controller, keyval: int, _keycode: int, state: Gdk.ModifierType) -> bool:
         listing = self.suggestions.get_visible()
         if keyval == Gdk.KEY_Escape:
             if listing:
@@ -835,6 +888,11 @@ class Bubble:
         if listing and keyval in (Gdk.KEY_Up, Gdk.KEY_Down):
             self._move_selection(-1 if keyval == Gdk.KEY_Up else 1)
             return True
+        if keyval in (Gdk.KEY_v, Gdk.KEY_V) and state & Gdk.ModifierType.CONTROL_MASK:
+            formats = self.window.get_clipboard().get_formats()
+            if any(mime.startswith("image/") for mime in formats.get_mime_types() or []):
+                self.on_paste_image()  # sinon, collage de texte ordinaire
+                return True
         if self.history and not self.entry.get_text() and keyval in (Gdk.KEY_Up, Gdk.KEY_Down):
             self._step_exchange(-1 if keyval == Gdk.KEY_Up else 1)
             return True

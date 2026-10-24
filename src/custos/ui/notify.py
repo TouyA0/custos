@@ -100,6 +100,9 @@ class NotifyUI:
     def set_alert(self, alert: str | None, text: str) -> None:
         pass  # pas de barre sans overlay
 
+    def set_attachments(self, count: int) -> None:
+        pass  # pas de carte où coller une image
+
     def set_history(self, exchanges: list[tuple[str, str]]) -> None:
         pass  # pas de carte : seulement la dernière réponse
 

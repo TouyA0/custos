@@ -1,6 +1,6 @@
 """Collecte du contexte envoyé à Claude (fenêtre active, sélection, capture)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from custos.config import PrivacyConfig
@@ -23,18 +23,30 @@ class Context:
     failure: dict | None = None  # commande shell en échec (message du hook)
     attached: bool = False  # `window` est la fenêtre où la mascotte est accrochée
     image_kind: str = "window"  # d'où vient `screenshot` : window, clipboard ou screenshot
+    # Images jointes par toi (collées, glissées), pour la prochaine question.
+    attachments: list[Path] = field(default_factory=list)
+
+    def images(self, first: bool) -> list[Path]:
+        """Images à envoyer : la capture avec la première question, puis les pièces jointes."""
+        return ([self.screenshot] if first and self.screenshot else []) + self.attachments
 
     def cleanup(self) -> None:
         if self.screenshot:
             self.screenshot.unlink(missing_ok=True)
             self.screenshot = None
+        for path in self.attachments:
+            path.unlink(missing_ok=True)
+        self.attachments = []
 
 
 IMAGE_LABELS = {
     "window": ("capture jointe", "Une capture de cette fenêtre est jointe."),
     "clipboard": ("image copiée", "Une image que je viens de copier est jointe."),
     "screenshot": ("capture d'écran", "Une capture d'écran (zone que j'ai choisie) est jointe."),
+    "dropped": ("image déposée", "Une image que je viens de te donner est jointe."),
 }
+ATTACHMENT_NOTE = "Je joins aussi {count} image(s) à cette question."
+
 
 
 def collect(
@@ -111,7 +123,7 @@ def hint(context: Context) -> str:
         return "Entrée : pourquoi ça a échoué ?"
     if context.selection:
         return "Entrée : aide sur la sélection"
-    if context.screenshot:
+    if context.screenshot or context.attachments:
         return "Entrée : que vois-tu ?"
     return "Demande à Custos…"
 
@@ -122,7 +134,7 @@ def default_question(context: Context) -> str | None:
         return FAILURE_QUESTION
     if context.selection:
         return DEFAULT_QUESTION
-    if context.screenshot:
+    if context.screenshot or context.attachments:
         return "Que vois-tu ? Aide-moi."
     return None
 
@@ -147,6 +159,8 @@ def build_prompt(question: str | None, context: Context) -> str:
             parts.append(f"Sa sortie :\n```\n{output}\n```")
     if context.screenshot:
         parts.append(IMAGE_LABELS[context.image_kind][1])
+    if context.attachments:
+        parts.append(ATTACHMENT_NOTE.format(count=len(context.attachments)))
     if context.selection:
         parts.append(f"Texte sélectionné :\n```\n{context.selection}\n```")
 

@@ -31,7 +31,7 @@ from custos.states import MascotState
 from custos.ui import position, theme
 from custos.ui.animation import ALL_SPRITES, Animator
 from custos.ui.bubble import WIDTH as BUBBLE_WIDTH
-from custos.ui.bubble import Bubble
+from custos.ui.bubble import Bubble, image_drop_target
 from custos.ui.bubble import style as bubble_style
 from custos.ui.position import PADDING
 from custos.ui.tray import Tray
@@ -247,6 +247,9 @@ class MascotOverlay:
             on_history=lambda query: app.on_history(query),
             on_open_history=lambda session: app.on_open_history(session),
             on_run=lambda command: app.on_run(command),
+            on_paste_image=lambda: app.on_paste_image(),
+            on_image=lambda path, temporary: app.on_image(path, temporary),
+            on_remove_attachments=lambda: app.on_remove_attachments(),
         )
 
         self.canvas = round(config.size * (1 + 2 * PADDING))
@@ -272,6 +275,8 @@ class MascotOverlay:
         self._drag_monitors: list[hyprland.Monitor] = []
         self._build_menu()
         self.window.set_child(self.widget)
+        # Une image glissée sur la mascotte : la carte s'ouvre avec elle.
+        self.widget.add_controller(image_drop_target(lambda path, temp: app.on_image(path, temp)))
 
         self._css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_display(
@@ -658,6 +663,12 @@ class OverlayUI:
         self.app.on_open_full = daemon.open_full
         self.app.on_run = daemon.run_in_terminal
         self.app.on_menu = daemon.tray_menu
+        # Lire et convertir une image prend un instant : hors du thread GTK.
+        self.app.on_paste_image = lambda: threading.Thread(target=daemon.paste_image, daemon=True).start()
+        self.app.on_image = lambda path, temporary: threading.Thread(
+            target=daemon.add_image, args=(path, temporary), daemon=True
+        ).start()
+        self.app.on_remove_attachments = daemon.remove_attachments
         # Lire le contexte appelle hyprctl et wl-paste : hors du thread GTK.
         self.app.on_new = lambda: threading.Thread(target=daemon.new_conversation, daemon=True).start()
 
@@ -686,6 +697,9 @@ class OverlayUI:
 
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self._on_gtk_thread(lambda overlay: overlay.bubble.reopen(summary, question, answer))
+
+    def set_attachments(self, count: int) -> None:
+        self._on_gtk_thread(lambda overlay: overlay.bubble.set_attachments(count))
 
     def set_history(self, exchanges: list[tuple[str, str]]) -> None:
         exchanges = list(exchanges)  # copie : la liste du daemon continue de grandir
@@ -758,6 +772,9 @@ class MascotApp(Gtk.Application):
         self.on_open_history: Callable[[str], None] = lambda session: None
         self.on_run: Callable[[str], None] = lambda command: None
         self.on_menu: Callable[[], list] = list  # entrées du daemon pour le menu de l'icône
+        self.on_paste_image: Callable[[], None] = lambda: None
+        self.on_image: Callable[[Path, bool], None] = lambda path, temporary: None
+        self.on_remove_attachments: Callable[[], None] = lambda: None
         self.connect("activate", self._on_activate)
 
     def _menu(self) -> list:

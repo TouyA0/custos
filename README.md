@@ -111,6 +111,10 @@ te donner des commandes qui s'y appliquent. Son caractère, et ce qu'il doit sav
 c'est toi qui l'écris dans `~/.config/custos/custos.md` (voir `config/custos.example.md`) :
 le fichier est joint à chaque question, sans redémarrer.
 
+Pour lui montrer une image, colle-la dans la carte (Ctrl+V) ou glisse-la sur la mascotte
+ou sur la carte (depuis tes fichiers ou un navigateur) : une petite icône dans le champ
+indique qu'elle est jointe à ta prochaine question (un clic la retire).
+
 Custos remarque aussi, localement et sans appeler Claude, ce que tu pourrais vouloir lui
 montrer : un texte sélectionné (📋), une image copiée ou une capture `SUPER + SHIFT + S`
 de caelestia (🖼️). Un badge s'allume quelques secondes sur la mascotte ; un clic ouvre la
