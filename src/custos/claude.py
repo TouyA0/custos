@@ -41,15 +41,51 @@ commande prête, c'est lui qui la valide et tape son mot de passe. Dis-le dans t
 # Toujours en dernier : le caractère choisi change le ton, pas la longueur.
 BREVITY = "Quel que soit ton caractère, reste bref : tes réponses s'affichent dans une petite bulle."
 
-# Mode agent : jamais de sudo (pas de mot de passe), jamais les secrets.
-DISALLOWED_TOOLS = [
-    "Bash(sudo *)",
-    "Read(~/.ssh/**)",
-    "Read(~/.gnupg/**)",
-    "Read(~/.local/share/keyrings/**)",
-    "Read(~/.claude/.credentials.json)",
-    "Read(**/*.kdbx)",
+# Mode agent : jamais les secrets. Chemins depuis ton dossier personnel : dossiers ou fichiers.
+SECRET_PATHS = [
+    ".ssh", ".gnupg", ".local/share/keyrings", ".password-store",
+    ".claude/.credentials.json", ".config/gh/hosts.yml", ".git-credentials", ".netrc",
+    ".aws", ".docker/config.json", ".kube",
+    ".mozilla", ".config/BraveSoftware", ".config/google-chrome", ".config/chromium",
 ]
+
+# Jamais root (pas de mot de passe : `custos terminal` le lui laisse), et l'outil Read ne lit
+# pas les secrets. Bash, lui, est arrêté par le bac à sable (voir sandbox_settings) : une règle
+# sur le texte de la commande se contourne trop facilement (`cat ~/.s*/id_ed25519`).
+DISALLOWED_TOOLS = [
+    *(f"Bash({escalate} *)" for escalate in ("sudo", "doas", "pkexec", "run0", "su")),
+    "Bash(su)",
+    *(rule for path in SECRET_PATHS for rule in (f"Read(~/{path})", f"Read(~/{path}/**)")),
+    "Read(**/*.kdbx)",
+    "Read(**/.env)",
+]
+
+
+def sandbox_settings() -> dict:
+    """Bac à sable de Claude Code pour ses commandes (bubblewrap) : les secrets y sont
+    invisibles, quelle que soit la commande ; tout ton dossier reste modifiable, le réseau
+    et les sockets (Hyprland, D-Bus) restent ouverts. `custos` et `xdg-open` tournent en
+    dehors : le terminal pour sudo, le navigateur. Une commande qui a besoin d'en sortir
+    passe par une demande de permission dans la carte."""
+    home = Path.home()
+    return {
+        "sandbox": {
+            "enabled": True,
+            "autoAllowBashIfSandboxed": False,  # le mode auto juge toujours chaque commande
+            "excludedCommands": [f"{custos_executable()} *", "custos *", "xdg-open *"],
+            "network": {"allowedDomains": ["*"], "allowAllUnixSockets": True},
+            "filesystem": {
+                "allowWrite": [str(home)],
+                "denyRead": [str(home / path) for path in SECRET_PATHS],
+            },
+        }
+    }
+
+
+def sandbox_available() -> bool:
+    """bubblewrap et socat : ce qu'il faut au bac à sable de Claude Code sous Linux."""
+    return bool(shutil.which("bwrap") and shutil.which("socat"))
+
 
 ALLOW, ALWAYS, DENY = "allow", "always", "deny"  # réponses à une demande de permission
 
@@ -169,6 +205,8 @@ def build_command(
             "--add-dir", str(Path.home()),
             "--disallowedTools", *DISALLOWED_TOOLS,
         ]
+        if config.sandbox and sandbox_available():
+            command += ["--settings", json.dumps(sandbox_settings())]
     else:
         command += ["--tools", ""]  # rien que répondre
     command += ["--system-prompt", system_prompt]

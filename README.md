@@ -14,7 +14,9 @@ Mascotte gardienne pour Hyprland, propulsée par Claude : elle veille sur ton é
 - Custos **agit** sur ton PC avec les outils de Claude Code, en mode auto : il lit,
   lance des commandes, modifie ta config, ouvre une page… et ne te demande ton accord
   que pour ce que le mode auto juge sensible. Jamais de `sudo` ni de lecture de tes
-  secrets (`tools = false` dans `[claude]` pour qu'il réponde seulement).
+  secrets : ses commandes tournent dans le bac à sable de Claude Code (bubblewrap), où tes
+  clés SSH et GPG, tes jetons et tes profils de navigateur sont invisibles (`tools = false`
+  dans `[claude]` pour qu'il réponde seulement).
 - Certaines fenêtres ne sont jamais lues : une appli entière (`blocked_classes`, ton
   gestionnaire de mots de passe) ou une page précise d'après son titre (`blocked_titles`,
   ta banque ou la navigation privée dans le navigateur).
@@ -22,7 +24,7 @@ Mascotte gardienne pour Hyprland, propulsée par Claude : elle veille sur ton é
 ## Prérequis (Arch Linux)
 
 ```bash
-sudo pacman -S python python-gobject gtk4 gtk4-layer-shell grim wl-clipboard
+sudo pacman -S python python-gobject gtk4 gtk4-layer-shell grim wl-clipboard bubblewrap socat
 ```
 
 Et [Claude Code](https://claude.com/claude-code), connecté à ton compte (`claude /login`).

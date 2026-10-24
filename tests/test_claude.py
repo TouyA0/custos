@@ -67,9 +67,27 @@ def test_agent_command_has_tools_in_auto_mode() -> None:
     assert "--tools" not in cmd
     assert cmd[cmd.index("--permission-mode") + 1] == "auto"
     assert cmd[cmd.index("--permission-prompt-tool") + 1] == "stdio"
-    assert "Bash(sudo *)" in cmd and "Read(~/.ssh/**)" in cmd
-    # Les listes d'options s'arrêtent avant le prompt système.
-    assert cmd[cmd.index("--system-prompt") - 1] == claude.DISALLOWED_TOOLS[-1]
+    assert "Bash(sudo *)" in cmd and "Bash(pkexec *)" in cmd and "Read(~/.ssh/**)" in cmd
+    # Les listes d'options s'arrêtent avant ce qui suit (le prompt n'est pas pris pour une règle).
+    assert cmd[cmd.index("--disallowedTools") + len(claude.DISALLOWED_TOOLS) + 1].startswith("--")
+
+
+def test_agent_runs_commands_in_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(claude, "sandbox_available", lambda: True)
+    cmd = claude.build_command(ClaudeConfig(), agent=True)
+    sandbox = json.loads(cmd[cmd.index("--settings") + 1])["sandbox"]
+    assert sandbox["enabled"] and not sandbox["autoAllowBashIfSandboxed"]
+    assert str(Path.home() / ".ssh") in sandbox["filesystem"]["denyRead"]
+    assert sandbox["filesystem"]["allowWrite"] == [str(Path.home())]
+    assert "xdg-open *" in sandbox["excludedCommands"]
+
+
+def test_no_sandbox_when_disabled_or_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(claude, "sandbox_available", lambda: True)
+    assert "--settings" not in claude.build_command(ClaudeConfig(sandbox=False), agent=True)
+    assert "--settings" not in claude.build_command(ClaudeConfig(), agent=False)
+    monkeypatch.setattr(claude, "sandbox_available", lambda: False)
+    assert "--settings" not in claude.build_command(ClaudeConfig(), agent=True)
 
 
 def test_describe_tool_steps() -> None:

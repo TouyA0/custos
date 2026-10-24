@@ -38,6 +38,8 @@ class ClaudeConfig:
     # Custos agit sur ton PC avec les outils de Claude Code (mode auto) ; false : il répond seulement.
     tools: bool = True
     agent_timeout: int = 1800  # secondes : une vraie tâche peut être longue
+    # Ses commandes dans le bac à sable de Claude Code : tes secrets y sont invisibles.
+    sandbox: bool = True
     # Ouvrir la conversation en grand (bouton ↗ de la bulle) : {session}, {cwd}, {model}
     open_command: str = "foot --working-directory={cwd} claude --resume {session} --model {model}"
 

@@ -10,6 +10,10 @@ timeout = 120  # secondes, pour une simple réponse
 # ce qui est sensible). false : il répond seulement, sans rien toucher.
 tools = true
 agent_timeout = 1800  # secondes : une vraie tâche peut être longue
+# Ses commandes tournent dans le bac à sable de Claude Code (bubblewrap et socat) : tes
+# secrets (clés SSH, GPG, jetons, profils de navigateur…) y sont invisibles. Ton dossier
+# reste modifiable et le réseau ouvert. false seulement si une commande y échoue sans raison.
+sandbox = true
 # Bouton ↗ de la bulle : ouvre la conversation en grand (Claude Code dans un terminal).
 open_command = "foot --working-directory={cwd} claude --resume {session} --model {model}"
 
