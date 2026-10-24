@@ -59,6 +59,7 @@ class UI(Protocol):
     def show_error(self, text: str) -> None: ...
     def show_notice(self, kind: str | None) -> None: ...
     def reopen(self, summary: str, question: str, answer: str) -> None: ...
+    def set_history(self, exchanges: list[tuple[str, str]]) -> None: ...
     def set_hidden(self, hidden: bool) -> None: ...
     def attach(self, window: hyprland.ActiveWindow) -> None: ...
     def detach(self) -> None: ...
@@ -125,6 +126,8 @@ class Session:
     summary: str = ""  # ce que Custos a lu, affiché en haut de la carte
     last_question: str = ""
     last_answer: str = ""
+    # Questions et réponses déjà finies, dans l'ordre : la carte montre les précédentes au-dessus.
+    exchanges: list[tuple[str, str]] = field(default_factory=list)
     always: set[tuple[str, str]] = field(default_factory=set)  # actions autorisées « toujours »
 
 
@@ -227,6 +230,7 @@ class Daemon:
         if message.get("question"):
             return message["question"]
         self.card_open = True
+        self.ui.set_history([])
         self.ui.open_prompt(self.session.summary, context.hint(ctx))
         return None
 
@@ -237,6 +241,7 @@ class Daemon:
         if self.notice and self.notice.kind == ANSWER_READY:
             self.notice = None
             self._show_badge()
+        self.ui.set_history(session.exchanges[:-1])
         self.ui.reopen(session.summary, session.last_question, session.last_answer)
 
     def _show_work(self) -> None:
@@ -297,6 +302,7 @@ class Daemon:
             summary=f"🕘 {history.when(found.updated)}",
             last_question=found.last_question,
             last_answer=found.last_answer,
+            exchanges=list(found.exchanges),
         )
         self._reopen()
 
@@ -635,6 +641,7 @@ class Daemon:
         )
         self.ui.set_state(MascotState.THINKING)
         self.card_open = True
+        self.ui.set_history(session.exchanges)
         self.ui.start_answer(f"{question} · {short_model(model)}" if model else question)
         return session, work, prompt, images, agent, model
 
@@ -650,6 +657,8 @@ class Daemon:
         log.info("réponse en %.1f s (%d car.)", time.monotonic() - begin, len(answer))
 
         session.last_question, session.last_answer = work.question, answer
+        if answer:
+            session.exchanges.append((work.question, answer))
         self.ui.end_answer(answer)
         self.ui.set_state(MascotState.TALKING if self.card_open else MascotState.IDLE)
         if not self.card_open:

@@ -24,6 +24,7 @@ class Conversation:
     title: str  # première question
     last_question: str
     last_answer: str
+    exchanges: tuple[tuple[str, str], ...] = ()  # (question, réponse) dans l'ordre
 
 
 def sessions_dir(workdir: Path | None = None) -> Path:
@@ -59,7 +60,7 @@ def _answer(content) -> str | None:
 def read(path: Path) -> Conversation | None:
     """Une conversation, ou None si elle n'a pas de réponse (interrompue, vide)."""
     questions: list[str] = []
-    answer = ""
+    answers: list[str] = []  # la réponse à chaque question (vide si elle n'en a pas eu)
     try:
         with path.open(encoding="utf-8", errors="replace") as lines:
             for line in lines:
@@ -76,17 +77,18 @@ def read(path: Path) -> Conversation | None:
                     question = _question(content)
                     if question:
                         questions.append(question)
-                        answer = ""  # la réponse qui compte est celle d'après
-                elif event.get("type") == "assistant":
+                        answers.append("")  # la réponse qui compte est celle d'après
+                elif event.get("type") == "assistant" and answers:
                     text = _answer(content)
                     if text:
-                        answer = text  # le dernier texte : la conclusion, après les outils
+                        answers[-1] = text  # le dernier texte : la conclusion, après les outils
         updated = path.stat().st_mtime
     except OSError:
         return None
-    if not questions or not answer:
+    if not questions or not answers[-1]:
         return None
-    return Conversation(path.stem, updated, questions[0], questions[-1], answer)
+    exchanges = tuple((q, a) for q, a in zip(questions, answers, strict=True) if a)
+    return Conversation(path.stem, updated, questions[0], questions[-1], answers[-1], exchanges)
 
 
 _cache: dict[Path, tuple[float, Conversation | None]] = {}

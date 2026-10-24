@@ -26,6 +26,7 @@ class FakeUI:
         self.attached: list = []
         self.toggles = 0
         self.reopened: list[tuple[str, str, str]] = []
+        self.histories: list[list[tuple[str, str]]] = []
         self.monitor_changes = 0
         self.statuses: list[str] = []
         self.resets = 0
@@ -65,6 +66,9 @@ class FakeUI:
 
     def toggle_stowed(self) -> None:
         self.toggles += 1
+
+    def set_history(self, exchanges: list[tuple[str, str]]) -> None:
+        self.histories.append(list(exchanges))
 
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self.reopened.append((summary, question, answer))
@@ -1152,3 +1156,30 @@ def test_command_without_terminal_explains(monkeypatch, ui) -> None:
     monkeypatch.setattr(daemon.terminal, "open_with", missing)
     daemon.Daemon(Config(), ui).run_in_terminal("df -h")
     assert ui.errors and "terminal" in ui.errors[-1]
+
+
+def test_follow_up_keeps_earlier_exchanges_above(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    assert ui.histories == [[]]  # nouvelle conversation : rien au-dessus
+    d.answer("un")
+    d.answer("deux")
+    d.answer("trois")
+    assert ui.histories[-1] == [("un", "Bonjour !"), ("deux", "Bonjour !")]
+    d.close_bubble()
+    d.handle({"type": "ask"})  # reprise : la dernière réponse, les autres au-dessus
+    assert ui.histories[-1] == [("un", "Bonjour !"), ("deux", "Bonjour !")]
+    assert ui.reopened[-1][1:] == ("trois", "Bonjour !")
+
+
+def test_reopened_history_shows_its_exchanges(monkeypatch, ui) -> None:
+    from custos import history
+
+    exchanges = (("le catéchisme", "CEC"), ("et les anges ?", "CEC §328"))
+    found = history.Conversation("ancienne", 0.0, "le catéchisme", "et les anges ?", "CEC §328", exchanges)
+    monkeypatch.setattr(daemon.history, "find", lambda session: found)
+    d = daemon.Daemon(Config(), ui)
+    d.open_history("ancienne")
+    assert ui.histories[-1] == [("le catéchisme", "CEC")]
+    assert ui.reopened[-1][1:] == ("et les anges ?", "CEC §328")

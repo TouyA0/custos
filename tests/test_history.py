@@ -65,3 +65,18 @@ def test_when() -> None:
     assert history.when(datetime(2026, 10, 23, 23, 33).timestamp(), now) == "hier 23:33"
     assert history.when(datetime(2026, 10, 22, 19, 54).timestamp(), now) == "jeu. 19:54"
     assert history.when(datetime(2026, 10, 1, 8, 0).timestamp(), now) == "01/10"
+
+
+def test_reads_every_exchange_in_order(sessions: Path) -> None:
+    write(sessions, "a", [
+        line("user", "Question : c'est quoi fstab ?"),
+        line("assistant", [{"type": "text", "text": "La table des montages."}]),
+        line("user", "et swap ?"),  # interrompue : pas de réponse
+        line("user", "et /home ?"),
+        line("assistant", [{"type": "text", "text": "Je regarde."}, {"type": "tool_use", "name": "Read"}]),
+        line("user", [{"type": "tool_result", "content": "…"}]),
+        line("assistant", [{"type": "text", "text": "Sur sda2."}]),
+    ], 1000)
+    found = history.find("a", WORKDIR)
+    assert found.exchanges == (("c'est quoi fstab ?", "La table des montages."), ("et /home ?", "Sur sda2."))
+    assert (found.last_question, found.last_answer) == ("et /home ?", "Sur sda2.")

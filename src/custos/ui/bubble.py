@@ -34,6 +34,8 @@ from custos.ui.theme import LIGHT_THEME, Theme, mix, rgba
 
 WIDTH = 400
 MAX_HEIGHT = 360
+MAX_HISTORY = 10  # échanges précédents gardés au-dessus de la réponse
+HISTORY_PEEK = 72  # px : hauteur minimale quand il y a des échanges au-dessus, pour y remonter
 COPIED_FEEDBACK = 1500  # ms d'affichage du ✓ après une copie
 FADE = 120  # ms : fondu de la carte à l'ouverture et à la fermeture
 RENDER_INTERVAL = 120  # ms : pendant l'arrivée d'une réponse, on redessine au plus ~8 fois/s
@@ -178,7 +180,10 @@ class Bubble:
         self._thinking_frame = 0
         self._thinking_timer = 0
         self._render_pending = 0
-        self._height: tuple[bool, int] | None = None
+        self._height: tuple[bool, int, int] | None = None
+        self.history: list[tuple[str, str]] = []  # échanges précédents, au-dessus de la réponse
+        self._earlier = 0  # hauteur de ces échanges : la réponse en cours commence là
+        self._expanded = False  # la carte s'est agrandie parce que tu es remonté les lire
         self._placement: Placement | None = None
         self._fade_timer = 0
 
@@ -227,12 +232,23 @@ class Bubble:
         header.append(self.open_button)
         header.append(_icon_button("✕", "Fermer (Échap)", lambda *_: self.close()))
 
+        # Les échanges précédents au-dessus de la réponse : la carte s'ouvre sur la réponse,
+        # on remonte pour les relire (ou ↑ ↓ dans le champ vide). Pas de bouton.
+        self.history_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, visible=False)
         self.blocks = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.content.append(self.history_box)
+        self.content.append(self.blocks)
         self.scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, visible=False)
         self.scroll.set_propagate_natural_height(True)
         self.scroll.set_max_content_height(MAX_HEIGHT)
-        self.scroll.set_child(self.blocks)
+        self.scroll.set_child(self.content)
         self.scroll.set_margin_end(4)
+        # Seulement ton défilement (molette, pavé tactile) : celui de la carte qui suit la
+        # réponse ou se redessine ne doit pas l'agrandir.
+        wheel = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
+        wheel.connect("scroll", self._on_wheel)
+        self.scroll.add_controller(wheel)
 
         self.thinking_label = Gtk.Label(xalign=0, visible=False, ellipsize=Pango.EllipsizeMode.END)
         self.thinking_label.set_max_width_chars(1)
@@ -378,17 +394,40 @@ class Bubble:
         if self.visible:
             self._apply_placement()
 
+    def set_history(self, exchanges: list[tuple[str, str]]) -> None:
+        """Échanges précédents de la conversation, affichés au-dessus de la réponse."""
+        self.history = exchanges[-MAX_HISTORY:]
+        while child := self.history_box.get_first_child():
+            self.history_box.remove(child)
+        for question, answer in self.history:
+            exchange = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            asked = Gtk.Label(label=f"› {question}", xalign=0, ellipsize=Pango.EllipsizeMode.END)
+            asked.set_max_width_chars(1)
+            asked.add_css_class("question")
+            exchange.append(asked)
+            for widget in self._answer_widgets(answer):
+                exchange.append(widget)
+            divider = Gtk.Box()
+            divider.add_css_class("divider")
+            exchange.append(divider)
+            self.history_box.append(exchange)
+        self.history_box.set_visible(bool(self.history))
+        self._expanded = False
+        self._height = None
+
     @property
     def visible(self) -> bool:
         return self.window.get_visible()
 
     def refresh(self) -> None:
         """Nouveau thème : le code dans le texte reprend ses couleurs (balisage Pango)."""
+        self.set_history(self.history)
         self._render(from_top=not self.thinking)
 
     def open_prompt(self, summary: str, hint: str) -> None:
         """Nouvelle conversation : juste une ligne pour demander."""
         self.question, self.answer, self.summary = "", "", summary
+        self._expanded = False
         self._set_thinking(False)
         self._show_error("")
         self.entry.set_text("")
@@ -399,6 +438,7 @@ class Bubble:
     def reopen(self, summary: str, question: str, answer: str) -> None:
         """Conversation reprise : la dernière réponse, prête pour une question de suivi."""
         self.question, self.answer, self.summary = question, answer, summary
+        self._expanded = False
         self._set_thinking(False)
         self._show_error("")
         self.entry.set_text("")
@@ -410,9 +450,9 @@ class Bubble:
         if not self.visible:
             # Question venue de `custos ask "…"` : la carte s'ouvre directement sur la réponse.
             self.summary = ""
-        # Une question de suivi remplace la réponse affichée : la conversation complète
-        # reste dans la session Claude, à ouvrir en grand avec ↗.
+        # La réponse précédente passe au-dessus (set_history) : celle-ci prend sa place.
         self.question, self.answer = question, ""
+        self._expanded = False
         self.entry.set_text("")
         self._show_error("")
         self._set_thinking(True)
@@ -571,13 +611,8 @@ class Bubble:
 
         while child := self.blocks.get_first_child():
             self.blocks.remove(child)
-        for kind, content in markdown.blocks(self.answer.strip()):
-            if kind in ("code", "command"):
-                self.blocks.append(self._code_widget(content, command=kind == "command"))
-            elif kind == "table":
-                self.blocks.append(self._table_widget(content))
-            else:
-                self.blocks.append(self._text_widget(content))
+        for widget in self._answer_widgets(self.answer.strip()):
+            self.blocks.append(widget)
         if self.thinking and self.suggestions.get_visible():
             self.suggestions.set_visible(False)  # le champ disparaît : sa liste aussi
         listing = self.suggestions.get_visible()
@@ -592,23 +627,109 @@ class Bubble:
             self.entry.grab_focus()
         GLib.idle_add(self._fit_and_scroll, from_top)
 
-    def _fit_and_scroll(self, from_top: bool) -> bool:
-        # Hauteur de la zone de réponse : naturelle, plafonnée à MAX_HEIGHT (avec défilement).
+    def _answer_widgets(self, answer: str) -> list[Gtk.Widget]:
+        widgets = []
+        for kind, content in markdown.blocks(answer):
+            if kind in ("code", "command"):
+                widgets.append(self._code_widget(content, command=kind == "command"))
+            elif kind == "table":
+                widgets.append(self._table_widget(content))
+            else:
+                widgets.append(self._text_widget(content))
+        return widgets
+
+    def _fit(self) -> None:
+        """Hauteur de la zone de réponse : celle de la réponse en cours, plafonnée à
+        MAX_HEIGHT. Les échanges précédents ne l'agrandissent pas : ils sont au-dessus,
+        hors de vue, et la carte ne grandit que si tu remontes les lire."""
         width = self.blocks.get_width() or WIDTH - 28
         _minimum, natural, _, _ = self.blocks.measure(Gtk.Orientation.VERTICAL, width)
-        long_answer = natural > MAX_HEIGHT
-        height = (long_answer, MAX_HEIGHT if long_answer else natural)
-        if height != self._height:
-            self._height = height
-            # Défilement seulement pour une longue réponse : sinon la zone garde une
-            # hauteur minimale et laisse un vide sous une réponse d'une ligne.
-            self.scroll.set_policy(
-                Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC if long_answer else Gtk.PolicyType.NEVER
-            )
-            self.scroll.set_min_content_height(MAX_HEIGHT if long_answer else -1)
+        self._earlier = 0
+        if self.history_box.get_visible():
+            _minimum, earlier, _, _ = self.history_box.measure(Gtk.Orientation.VERTICAL, width)
+            self._earlier = earlier + self.content.get_spacing()
+        scrolls = natural > MAX_HEIGHT or self._earlier > 0
+        if self._expanded:
+            height = MAX_HEIGHT
+        elif self._earlier:
+            height = max(min(natural, MAX_HEIGHT), HISTORY_PEEK)
+        else:
+            height = min(natural, MAX_HEIGHT)
+        key = (scrolls, height, self._earlier)
+        if key == self._height:
+            return
+        self._height = key
+        # Défilement seulement quand il y a de quoi : sinon la zone garde une hauteur
+        # minimale et laisse un vide sous une réponse d'une ligne.
+        self.scroll.set_policy(
+            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC if scrolls else Gtk.PolicyType.NEVER
+        )
+        self.scroll.set_min_content_height(height if scrolls else -1)
+        self.scroll.set_max_content_height(height if scrolls else MAX_HEIGHT)
+
+    def _fit_and_scroll(self, from_top: bool) -> bool:
+        self._fit()
+        # Pendant la réponse, on suit sa fin ; une fois finie, on revient à son début
+        # (sous les échanges précédents).
         adjustment = self.scroll.get_vadjustment()
-        adjustment.set_value(adjustment.get_lower() if from_top else adjustment.get_upper())
+        adjustment.set_value(self._earlier if from_top else adjustment.get_upper())
         return GLib.SOURCE_REMOVE
+
+    def _scroll_after_resize(self, value: float) -> None:
+        """Défile jusqu'à `value` dès que la zone a sa nouvelle taille : avant, la position
+        serait ramenée dans les limites de l'ancienne. Quelques images au plus."""
+        adjustment = self.scroll.get_vadjustment()
+        frames = [8]
+
+        def tick(*_args) -> bool:
+            adjustment.set_value(value)
+            frames[0] -= 1
+            done = abs(adjustment.get_value() - value) < 1 and frames[0] < 6
+            return GLib.SOURCE_REMOVE if done or frames[0] <= 0 else GLib.SOURCE_CONTINUE
+
+        self.scroll.add_tick_callback(tick)
+
+    def _on_wheel(self, _controller, _dx: float, dy: float) -> bool:
+        """Tu remontes vers les échanges précédents : la carte s'agrandit pour les lire."""
+        if dy < 0 and self._earlier and not self._expanded:
+            self._expanded = True
+            self._fit()
+        return False  # le défilement lui-même continue normalement
+
+    def _step_exchange(self, step: int) -> None:
+        """↑ ↓ dans le champ vide : l'échange précédent ou suivant, comme l'historique du shell."""
+        starts = []
+        for widget in [*self._children(self.history_box), self.blocks]:
+            found, point = widget.compute_point(self.content, Graphene.Point())
+            if found:
+                starts.append(point.y)
+        adjustment = self.scroll.get_vadjustment()
+        current = adjustment.get_value()
+        if step < 0:
+            target = max((y for y in starts if y < current - 1), default=None)
+        else:
+            target = min((y for y in starts if y > current + 1), default=None)
+            if target is None or target >= self._earlier - 1:
+                # Retour à la dernière réponse : la carte reprend sa taille, puis on se
+                # place au début de la réponse, une fois la nouvelle taille appliquée.
+                self._expanded = False
+                self._fit()
+                self._scroll_after_resize(self._earlier)
+                return
+        if target is None:
+            return
+        if target < self._earlier and not self._expanded:
+            self._expanded = True
+            self._fit()
+        adjustment.set_value(target)
+
+    @staticmethod
+    def _children(box: Gtk.Box) -> list[Gtk.Widget]:
+        children, child = [], box.get_first_child()
+        while child:
+            children.append(child)
+            child = child.get_next_sibling()
+        return children
 
     def _on_activate(self, entry: Gtk.Entry) -> None:
         if self.thinking:
@@ -713,5 +834,8 @@ class Bubble:
             return True
         if listing and keyval in (Gdk.KEY_Up, Gdk.KEY_Down):
             self._move_selection(-1 if keyval == Gdk.KEY_Up else 1)
+            return True
+        if self.history and not self.entry.get_text() and keyval in (Gdk.KEY_Up, Gdk.KEY_Down):
+            self._step_exchange(-1 if keyval == Gdk.KEY_Up else 1)
             return True
         return False

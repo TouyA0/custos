@@ -682,6 +682,10 @@ class OverlayUI:
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self._on_gtk_thread(lambda overlay: overlay.bubble.reopen(summary, question, answer))
 
+    def set_history(self, exchanges: list[tuple[str, str]]) -> None:
+        exchanges = list(exchanges)  # copie : la liste du daemon continue de grandir
+        self._on_gtk_thread(lambda overlay: overlay.bubble.set_history(exchanges))
+
     def show_error(self, text: str) -> None:
         self._on_gtk_thread(lambda overlay: overlay.bubble.show_error(text))
 
