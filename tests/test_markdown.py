@@ -1,7 +1,6 @@
-import gi
 import pytest
 
-from custos.ui.markdown import blocks, to_pango
+from custos.ui.markdown import blocks, table_markup, to_pango, valid
 
 ANSWER = "Utilise **df** :\n\n```bash\ndf -h\n```\n\n- `-h` : tailles lisibles\n- `/` : racine"
 
@@ -50,11 +49,63 @@ def test_blocks_while_streaming_and_without_code() -> None:
 
 
 def test_markup_is_valid_pango() -> None:
-    gi.require_version("Pango", "1.0")
-    from gi.repository import GLib, Pango
+    for text in (
+        ANSWER, "a < b", "```\n<tag>\n```", "**pas fermé", "```bash\nen cours", LINKS, STYLES,
+        "*pas fermé", "[lien](https://a.fr/?q=<x>&y=1)", "un * seul et 3 * 4",
+    ):
+        if not valid(to_pango(text)):  # pragma: no cover
+            pytest.fail(f"balisage invalide pour {text!r}")
 
-    for text in (ANSWER, "a < b", "```\n<tag>\n```", "**pas fermé", "```bash\nen cours"):
-        try:
-            Pango.parse_markup(to_pango(text), -1, "\0")
-        except GLib.Error as exc:  # pragma: no cover
-            pytest.fail(f"balisage invalide pour {text!r} : {exc}")
+
+LINKS = "Voir [la doc](https://wiki.archlinux.org/title/Fstab), ou https://example.com/a_b_c."
+STYLES = "*italique*, _aussi_, **gras**, ~~barré~~, et nom_de_fichier.py ou 2 * 3 * 4"
+
+
+def test_links_are_clickable() -> None:
+    markup = to_pango(LINKS)
+    assert '<a href="https://wiki.archlinux.org/title/Fstab">la doc</a>' in markup
+    # Adresse nue : cliquable, sans le point de la phrase, et ses _ ne deviennent pas de l'italique.
+    assert '<a href="https://example.com/a_b_c">https://example.com/a_b_c</a>.' in markup
+
+
+def test_link_address_is_escaped() -> None:
+    assert 'href="https://a.fr/?q=1&amp;y=&quot;2&quot;"' in to_pango("[x](https://a.fr/?q=1&y=\"2\")")
+
+
+def test_italic_bold_strike() -> None:
+    markup = to_pango(STYLES)
+    assert "<i>italique</i>" in markup and "<i>aussi</i>" in markup
+    assert "<b>gras</b>" in markup and "<s>barré</s>" in markup
+    assert "nom_de_fichier.py" in markup  # pas d'italique au milieu d'un mot
+    assert "2 * 3 * 4" in markup  # une multiplication n'est pas de l'italique
+
+
+def test_code_is_left_alone() -> None:
+    assert "<i>" not in to_pango("`a *b* c` et `https://x.fr`") and "<a " not in to_pango("`https://x.fr`")
+
+
+def test_numbered_list() -> None:
+    assert to_pango("1. un\n2) deux") == "<b>1.</b> un\n<b>2.</b> deux"
+
+
+TABLE = "| Commande | Effet |\n|---|--:|\n| `df -h` | disque |\n| `free` | mémoire vive |"
+
+
+def test_blocks_split_tables() -> None:
+    text = f"Voici :\n{TABLE}\nVoilà."
+    assert blocks(text) == [("text", "Voici :"), ("table", TABLE), ("text", "Voilà.")]
+    assert blocks("a | b sans tableau") == [("text", "a | b sans tableau")]
+
+
+def test_table_is_aligned() -> None:
+    lines = table_markup(TABLE).split("\n")
+    assert lines[0] == "<b>Commande</b> │ <b>       Effet</b>"
+    assert lines[1] == "─────────┼─────────────"
+    assert lines[2].endswith(" │       disque")  # colonne alignée à droite (--:)
+    assert lines[3].endswith(" │ mémoire vive")
+    assert ">df -h</span>    │" in lines[2]  # le code compte pour sa longueur visible
+
+
+def test_table_markup_is_valid_pango() -> None:
+    assert valid(table_markup(TABLE + "\n| a < b | [x](https://x.fr) |"))
+    assert not valid("<b>pas fermé")

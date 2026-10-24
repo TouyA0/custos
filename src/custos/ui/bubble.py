@@ -24,7 +24,7 @@ gi.require_version("Graphene", "1.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 
-from gi.repository import Gdk, GLib, Graphene, Gtk, Pango
+from gi.repository import Gdk, Gio, GLib, Graphene, Gtk, Pango
 from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.context import clipboard
@@ -87,6 +87,8 @@ window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
 .card .permission button.allow:hover {{ background: {mix(theme.accent, theme.on_accent, 0.15)}; }}
 .card scrolledwindow.code {{ background-color: {rgba(text, 0.07)}; border-radius: 8px; }}
 .card label.code {{ padding: 8px 32px 8px 10px; }}
+.card label.table {{ padding: 2px 0 6px 0; }}
+.card label link, .card label link:visited {{ color: {theme.accent}; }}
 .card .divider {{ background-color: {rgba(text, 0.1)}; min-height: 1px; }}
 .card button.icon {{
     background: none;
@@ -294,12 +296,39 @@ class Bubble:
         label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         label.set_max_width_chars(1)  # la largeur vient de la carte, pas du texte
         markup = markdown.to_pango(text, self.theme.text, self.theme.code)
-        try:
-            Pango.parse_markup(markup, -1, "\0")
+        if markdown.valid(markup):
             label.set_markup(markup)
-        except GLib.Error:
+        else:
             label.set_text(text)  # Markdown inhabituel : texte brut plutôt que rien
+        label.connect("activate-link", self._on_link)
         return label
+
+    def _table_widget(self, table: str) -> Gtk.Widget:
+        # Comme le code : pas de retour à la ligne, un tableau large défile horizontalement.
+        label = Gtk.Label(xalign=0, yalign=0, selectable=True, focusable=False)
+        label.add_css_class("table")
+        markup = markdown.table_markup(table, self.theme.text, self.theme.code)
+        if markdown.valid(markup):
+            label.set_markup(markup)
+        else:
+            label.set_text(table)
+        label.connect("activate-link", self._on_link)
+        scroller = Gtk.ScrolledWindow(
+            hscrollbar_policy=Gtk.PolicyType.AUTOMATIC, vscrollbar_policy=Gtk.PolicyType.NEVER
+        )
+        scroller.set_propagate_natural_height(True)
+        scroller.set_child(label)
+        scroller.add_css_class("table")
+        return scroller
+
+    def _on_link(self, _label: Gtk.Label, uri: str) -> bool:
+        """Lien de la réponse : ouvert dans le navigateur, et la carte se ferme pour le laisser voir."""
+        try:
+            Gio.AppInfo.launch_default_for_uri(uri, None)
+        except GLib.Error:
+            return False  # GTK essaie à sa façon
+        self.close()
+        return True
 
     def _code_widget(self, code: str) -> Gtk.Widget:
         # Pas de retour à la ligne : une longue ligne défile horizontalement, comme dans
@@ -527,7 +556,8 @@ class Bubble:
         while child := self.blocks.get_first_child():
             self.blocks.remove(child)
         for kind, content in markdown.blocks(self.answer.strip()):
-            self.blocks.append(self._code_widget(content) if kind == "code" else self._text_widget(content))
+            widget = {"code": self._code_widget, "table": self._table_widget}.get(kind, self._text_widget)
+            self.blocks.append(widget(content))
         if self.thinking and self.suggestions.get_visible():
             self.suggestions.set_visible(False)  # le champ disparaît : sa liste aussi
         listing = self.suggestions.get_visible()
