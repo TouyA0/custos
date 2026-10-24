@@ -28,11 +28,11 @@ from gi.repository import Gtk4LayerShell as LayerShell
 from custos.config import MascotConfig
 from custos.context import hyprland
 from custos.states import MascotState
-from custos.ui import position
+from custos.ui import position, theme
 from custos.ui.animation import ALL_SPRITES, Animator
-from custos.ui.bubble import CSS as BUBBLE_CSS
 from custos.ui.bubble import WIDTH as BUBBLE_WIDTH
 from custos.ui.bubble import Bubble
+from custos.ui.bubble import style as bubble_style
 from custos.ui.position import PADDING
 from custos.ui.tray import Tray
 
@@ -272,11 +272,29 @@ class MascotOverlay:
         self._build_menu()
         self.window.set_child(self.widget)
 
-        css = Gtk.CssProvider()
-        css.load_from_string("window.custos { background: transparent; }" + BUBBLE_CSS)
+        self._css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            Gdk.Display.get_default(), self._css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
+        self._apply_theme()
+        self._scheme_monitor = None
+        if theme.follows_caelestia(config.theme):
+            # Nouveau fond d'écran, nouvelle palette : la carte change de couleurs avec.
+            self._scheme_monitor = Gio.File.new_for_path(str(theme.scheme_path())).monitor_file(
+                Gio.FileMonitorFlags.WATCH_MOVES, None
+            )
+            self._scheme_monitor.set_rate_limit(500)
+            self._scheme_monitor.connect("changed", lambda *_args: self._apply_theme())
+
+    def _apply_theme(self) -> None:
+        """Couleurs et police de la carte (voir theme.py), relues quand caelestia change."""
+        colors = theme.load(self.config.theme)
+        self.bubble.theme = colors
+        self._css.load_from_string(
+            "window.custos { background: transparent; }" + bubble_style(colors, self.config.font)
+        )
+        if self.bubble.visible:
+            self.bubble.refresh()
 
     @property
     def state(self) -> MascotState:

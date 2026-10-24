@@ -54,6 +54,9 @@ class MascotConfig:
     tray: bool = True
     outline: bool = True
     sprites_dir: str = ""
+    # Couleurs de la carte : auto (celles de caelestia si elle est là), light ou dark.
+    theme: str = "auto"
+    font: str = "JetBrains Mono Nerd Font"  # police de la carte : celle du terminal
 
 
 @dataclass

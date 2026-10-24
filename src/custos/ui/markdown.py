@@ -7,11 +7,9 @@ Pendant le streaming, un bloc de code pas encore refermé est traité comme du c
 import html
 import re
 
-# Couleurs de la carte (verre blanc, texte sombre)
+# Couleurs du code par défaut (thème clair) ; la carte passe celles de son thème.
 CODE_BG = "#e4e6eb"
 CODE_FG = "#1a1f2b"
-INLINE_CODE_FG = "#1a1f2b"
-INLINE_CODE_BG = "#e4e6eb"
 
 _FENCE_LANG = re.compile(r"[\w+#.-]*")
 
@@ -28,11 +26,11 @@ def _split_code(part: str) -> str:
     return part.strip("\n")
 
 
-def _inline(text: str) -> str:
+def _inline(text: str, code_fg: str, code_bg: str) -> str:
     text = _escape(text)
     text = re.sub(
         r"`([^`\n]+)`",
-        rf'<span font_family="monospace" foreground="{INLINE_CODE_FG}" background="{INLINE_CODE_BG}">\1</span>',
+        rf'<span font_family="monospace" foreground="{code_fg}" background="{code_bg}">\1</span>',
         text,
     )
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
@@ -40,18 +38,18 @@ def _inline(text: str) -> str:
     return re.sub(r"(?m)^(\s*)[-*] ", r"\1• ", text)
 
 
-def to_pango(text: str) -> str:
+def to_pango(text: str, code_fg: str = CODE_FG, code_bg: str = CODE_BG) -> str:
     parts = text.split("```")
     out = []
     for i, part in enumerate(parts):
         if i % 2:
             code = _escape(_split_code(part))
             out.append(
-                f'<span font_family="monospace" background="{CODE_BG}" '
-                f'foreground="{CODE_FG}">{code}</span>'
+                f'<span font_family="monospace" background="{code_bg}" '
+                f'foreground="{code_fg}">{code}</span>'
             )
         else:
-            out.append(_inline(part))
+            out.append(_inline(part, code_fg, code_bg))
     return "".join(out)
 
 

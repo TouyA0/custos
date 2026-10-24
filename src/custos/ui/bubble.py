@@ -30,6 +30,7 @@ from gi.repository import Gtk4LayerShell as LayerShell
 from custos.context import clipboard
 from custos.ui import markdown, slash
 from custos.ui.position import Placement
+from custos.ui.theme import LIGHT_THEME, Theme, mix, rgba
 
 WIDTH = 400
 MAX_HEIGHT = 360
@@ -38,62 +39,67 @@ FADE = 120  # ms : fondu de la carte à l'ouverture et à la fermeture
 RENDER_INTERVAL = 120  # ms : pendant l'arrivée d'une réponse, on redessine au plus ~8 fois/s
 FONT = "JetBrains Mono Nerd Font"  # la police du terminal (foot)
 
-# Pas de flou : une règle de flou Hyprland sur cette carte a coïncidé avec des gels de
-# l'affichage (Hyprland 0.56). Fond blanc presque opaque pour rester lisible sans lui.
-CSS = f"""
+def style(theme: Theme, font: str = FONT) -> str:
+    """CSS de la carte, aux couleurs du thème (voir theme.py).
+
+    Pas de flou : une règle de flou Hyprland sur cette carte a coïncidé avec des gels de
+    l'affichage (Hyprland 0.56). Fond opaque pour rester lisible sans lui.
+    """
+    text, error = theme.text, theme.error
+    return f"""
 /* Pas totalement transparent : Hyprland n'envoie pas la souris à une surface à 0 %. */
 window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
 .card {{
-    background-color: rgba(248, 248, 250, 0.97);
-    border: 1px solid rgba(255, 255, 255, 0.7);
+    background-color: {theme.card};  /* opaque : rien ne transparaît derrière le texte */
+    border: 1px solid {rgba(theme.border, 0.7)};
     border-radius: 14px;
     padding: 8px 10px 12px 14px;
-    font-family: "{FONT}", monospace;
+    font-family: "{font}", monospace;
     font-size: 10pt;
     transition: opacity {FADE}ms ease-out;
 }}
 .card.hidden {{ opacity: 0; }}
-.card label {{ color: #1a1f2b; }}
-.card .context {{ font-size: 0.85em; color: rgba(26, 31, 43, 0.5); }}
-.card .question {{ color: rgba(26, 31, 43, 0.55); }}
-.card .thinking {{ color: rgba(26, 31, 43, 0.5); }}
-.card .error {{ color: #b3402f; }}
+.card label {{ color: {text}; }}
+.card .context {{ font-size: 0.85em; color: {rgba(text, 0.5)}; }}
+.card .question {{ color: {rgba(text, 0.55)}; }}
+.card .thinking {{ color: {rgba(text, 0.5)}; }}
+.card .error {{ color: {error}; }}
 .card .permission {{
-    background-color: rgba(179, 64, 47, 0.07);
-    border: 1px solid rgba(179, 64, 47, 0.25);
+    background-color: {rgba(error, 0.07)};
+    border: 1px solid {rgba(error, 0.25)};
     border-radius: 10px;
     padding: 8px 10px;
 }}
-.card .permission .title {{ color: #b3402f; font-size: 0.9em; }}
+.card .permission .title {{ color: {error}; font-size: 0.9em; }}
 .card .permission .action {{ font-size: 0.95em; }}
 .card .permission button {{
-    background: rgba(26, 31, 43, 0.06);
+    background: {rgba(text, 0.06)};
     border: none;
     box-shadow: none;
     border-radius: 8px;
-    color: #1a1f2b;
+    color: {text};
     padding: 2px 10px;
     min-height: 24px;
 }}
-.card .permission button:hover {{ background: rgba(26, 31, 43, 0.12); }}
-.card .permission button.allow {{ background: #1f2d4f; }}
-.card .permission button.allow label {{ color: #f8f8fa; }}  /* sinon « .card label » l'emporte */
-.card .permission button.allow:hover {{ background: #2c3d66; }}
-.card scrolledwindow.code {{ background-color: rgba(26, 31, 43, 0.07); border-radius: 8px; }}
+.card .permission button:hover {{ background: {rgba(text, 0.12)}; }}
+.card .permission button.allow {{ background: {theme.accent}; }}
+.card .permission button.allow label {{ color: {theme.on_accent}; }}  /* sinon « .card label » l'emporte */
+.card .permission button.allow:hover {{ background: {mix(theme.accent, theme.on_accent, 0.15)}; }}
+.card scrolledwindow.code {{ background-color: {rgba(text, 0.07)}; border-radius: 8px; }}
 .card label.code {{ padding: 8px 32px 8px 10px; }}
-.card .divider {{ background-color: rgba(26, 31, 43, 0.1); min-height: 1px; }}
+.card .divider {{ background-color: {rgba(text, 0.1)}; min-height: 1px; }}
 .card button.icon {{
     background: none;
     border: none;
     box-shadow: none;
     border-radius: 8px;
-    color: rgba(26, 31, 43, 0.55);
+    color: {rgba(text, 0.55)};
     font-size: 1.15em;
     min-width: 28px;
     min-height: 28px;
     padding: 0;
 }}
-.card button.icon:hover {{ background-color: rgba(26, 31, 43, 0.08); color: #1a1f2b; }}
+.card button.icon:hover {{ background-color: {rgba(text, 0.08)}; color: {text}; }}
 .card .codeblock button.copy {{
     font-size: 1em;
     min-width: 24px;
@@ -109,17 +115,17 @@ window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
     border: none;
     box-shadow: none;
     outline: none;
-    color: #1a1f2b;
-    caret-color: #1a1f2b;
+    color: {text};
+    caret-color: {text};
     padding: 0;
     min-height: 24px;
 }}
-.card entry placeholder {{ color: rgba(26, 31, 43, 0.4); }}
+.card entry placeholder {{ color: {rgba(text, 0.4)}; }}
 .card list.suggestions {{ background: transparent; }}
 .card list.suggestions row {{ border-radius: 8px; padding: 3px 6px; }}
-.card list.suggestions row:selected {{ background-color: rgba(26, 31, 43, 0.09); }}
-.card list.suggestions .when {{ color: rgba(26, 31, 43, 0.45); }}
-.card list.suggestions .empty {{ color: rgba(26, 31, 43, 0.45); }}
+.card list.suggestions row:selected {{ background-color: {rgba(text, 0.09)}; }}
+.card list.suggestions .when {{ color: {rgba(text, 0.45)}; }}
+.card list.suggestions .empty {{ color: {rgba(text, 0.45)}; }}
 """
 
 # Trois points dont un s'allume à tour de rôle, comme « en train d'écrire ».
@@ -148,6 +154,7 @@ class Bubble:
         on_history: Callable[[str], list[tuple[str, str, str]]] = lambda query: [],
         on_open_history: Callable[[str], None] = lambda session: None,
     ) -> None:
+        self.theme = LIGHT_THEME  # couleurs du code dans le texte (le reste : la feuille de style)
         self.on_history = on_history  # (session, quand, titre) des conversations trouvées
         self.on_open_history = on_open_history
         self._suggestions: list[tuple[str, str]] = []  # (action, valeur) de chaque ligne
@@ -286,7 +293,7 @@ class Bubble:
         label = Gtk.Label(xalign=0, wrap=True, selectable=True, focusable=False, hexpand=True)
         label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         label.set_max_width_chars(1)  # la largeur vient de la carte, pas du texte
-        markup = markdown.to_pango(text)
+        markup = markdown.to_pango(text, self.theme.text, self.theme.code)
         try:
             Pango.parse_markup(markup, -1, "\0")
             label.set_markup(markup)
@@ -329,6 +336,10 @@ class Bubble:
     @property
     def visible(self) -> bool:
         return self.window.get_visible()
+
+    def refresh(self) -> None:
+        """Nouveau thème : le code dans le texte reprend ses couleurs (balisage Pango)."""
+        self._render(from_top=not self.thinking)
 
     def open_prompt(self, summary: str, hint: str) -> None:
         """Nouvelle conversation : juste une ligne pour demander."""
