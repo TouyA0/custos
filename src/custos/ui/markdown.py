@@ -7,13 +7,14 @@ pas encore refermé est traité comme du code.
 
 import html
 import re
+from typing import NamedTuple
 
 # Couleurs du code par défaut (thème clair) ; la carte passe celles de son thème.
 CODE_BG = "#e4e6eb"
 CODE_FG = "#1a1f2b"
 
 _FENCE_LANG = re.compile(r"[\w+#.-]*")
-# Blocs qu'un clic ouvre dans un terminal : des commandes, pas un extrait de fichier.
+# Blocs que le clic droit lance dans un terminal : des commandes, pas un extrait de fichier.
 SHELL_LANGUAGES = {"bash", "sh", "shell", "zsh", "fish", "console", "shell-session", "terminal"}
 _LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
 _URL = re.compile(r"<?(https?://[^\s<>\"'`]+)>?")
@@ -201,14 +202,20 @@ def table_markup(table: str, code_fg: str = CODE_FG, code_bg: str = CODE_BG) -> 
     return "\n".join(out)
 
 
-def blocks(text: str) -> list[tuple[str, str]]:
-    """Découpe une réponse en morceaux ("text", markdown), ("code", code brut),
-    ("command", commandes shell : un clic les ouvre dans un terminal) et ("table", tableau)."""
+class Block(NamedTuple):
+    kind: str  # text (markdown), code (brut), command (commandes shell) ou table
+    content: str
+    language: str = ""  # celle d'un bloc de code (```bash) : le shell qui le lancera
+
+
+def blocks(text: str) -> list[Block]:
+    """Découpe une réponse en morceaux : texte, code, commandes shell (le clic droit les
+    lance dans un terminal) et tableaux."""
     out = []
     for i, part in enumerate(text.split("```")):
         if i % 2:
             code, language = _code_and_language(part)
-            out.append(("command" if is_command(code, language) else "code", code))
+            out.append(Block("command" if is_command(code, language) else "code", code, language))
         elif part.strip():
-            out.extend(_split_tables(part.strip("\n")))
+            out.extend(Block(kind, content) for kind, content in _split_tables(part.strip("\n")))
     return out

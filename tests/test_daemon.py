@@ -1023,6 +1023,34 @@ def test_cli_terminal_prefills_fish_command() -> None:
         assert argv == ["foot", "fish", "-C", "commandline -- 'sudo rm \\'a b\\''"]
 
 
+def test_run_command_uses_the_shell_of_the_block(monkeypatch) -> None:
+    from custos import terminal
+
+    monkeypatch.setattr(terminal.machine, "terminal", lambda _open: "foot")
+    monkeypatch.setattr(terminal.machine, "shell", lambda _term: "fish")
+    argv = terminal.run_command("for f in *; do echo $f; done", "bash", "foot claude")
+    assert argv[:3] == ["foot", "sh", "-c"]
+    assert "bash -c 'for f in *; do echo $f; done'; exec fish" in argv[3]
+    assert argv[3].startswith("printf '\\033[1m$ %s\\033[0m\\n' 'for f in *; do echo $f; done';")  # affichée
+    # Sans langue précise (```console, une ligne sans langue) : ton shell.
+    assert "; fish -c 'df -h'; exec fish" in terminal.run_command("df -h", "console", "foot claude")[3]
+
+
+def test_execute_in_terminal(monkeypatch, ui) -> None:
+    ran = []
+    monkeypatch.setattr(daemon.terminal, "run_with", lambda *args: ran.append(args))
+    d = daemon.Daemon(Config(), ui)
+    d.execute_in_terminal("df -h", "bash")
+    assert ran == [("df -h", "bash", Config().claude.open_command)]
+
+    def missing(*_args):
+        raise FileNotFoundError("foot")
+
+    monkeypatch.setattr(daemon.terminal, "run_with", missing)
+    d.execute_in_terminal("df -h")
+    assert ui.errors == ["Impossible d'ouvrir le terminal : foot"]
+
+
 def test_open_history_reopens_conversation_for_follow_up(monkeypatch, ui, prompts) -> None:
     from custos import history
 

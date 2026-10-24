@@ -1051,13 +1051,22 @@ class Daemon:
         self.ui.set_attachments(0)
 
     def run_in_terminal(self, command: str) -> None:
-        """Clic sur une commande de la réponse : un terminal s'ouvre avec elle, prête à lancer."""
+        """« Préparer » sur une commande de la réponse : un terminal s'ouvre avec elle, prête à lancer."""
         try:
             terminal.open_with(command, self.config.claude.open_command)
         except OSError as exc:
             self.ui.show_error(f"Impossible d'ouvrir le terminal : {exc}")
             return
         log.info("commande ouverte dans un terminal")
+
+    def execute_in_terminal(self, command: str, language: str = "") -> None:
+        """« Exécuter » sur une commande de la réponse : lancée dans un terminal qui reste ouvert."""
+        try:
+            terminal.run_with(command, language, self.config.claude.open_command)
+        except OSError as exc:
+            self.ui.show_error(f"Impossible d'ouvrir le terminal : {exc}")
+            return
+        log.info("commande exécutée dans un terminal")
 
     @_locked
     def shell_event(self, message: dict) -> None:

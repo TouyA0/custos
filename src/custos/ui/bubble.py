@@ -95,7 +95,7 @@ window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
 .card .permission button.allow:hover {{ background: {mix(theme.accent, theme.on_accent, 0.15)}; }}
 .card scrolledwindow.code {{ background-color: {rgba(text, 0.07)}; border-radius: 8px; }}
 .card label.code {{ padding: 8px 32px 8px 10px; }}
-.card .codeblock.command:hover scrolledwindow.code {{ background-color: {rgba(text, 0.12)}; }}
+.card .codeblock:hover scrolledwindow.code {{ background-color: {rgba(text, 0.12)}; }}
 .card label.table {{ padding: 2px 0 6px 0; }}
 .card label link, .card label link:visited {{ color: {theme.accent}; }}
 .card .divider {{ background-color: {rgba(text, 0.1)}; min-height: 1px; }}
@@ -190,13 +190,15 @@ class Bubble:
         on_history: Callable[[str], list[tuple[str, str, str]]] = lambda query: [],
         on_open_history: Callable[[str], None] = lambda session: None,
         on_run: Callable[[str], None] = lambda command: None,
+        on_execute: Callable[[str, str], None] = lambda command, language: None,
         on_paste_image: Callable[[], None] = lambda: None,
         on_image: Callable[[Path, bool], None] = lambda path, temporary: None,
         on_remove_attachments: Callable[[], None] = lambda: None,
         commands: Callable[[], Sequence[slash.Command]] = tuple,
     ) -> None:
         self.commands = commands  # tes commandes « / » (config), en plus de celles de Custos
-        self.on_run = on_run  # ouvre une commande de la réponse dans un terminal
+        self.on_run = on_run  # ouvre une commande de la réponse dans un terminal, prête
+        self.on_execute = on_execute  # la lance dans un terminal (avec la langue de son bloc)
         self.on_paste_image = on_paste_image  # Ctrl+V avec une image dans le presse-papier
         self.on_remove_attachments = on_remove_attachments
         self.attachments = 0  # images jointes à la prochaine question
@@ -327,6 +329,28 @@ class Bubble:
         card.set_halign(Gtk.Align.START)
         self.card = card
         self.window.set_child(card)
+        self._build_code_menu()
+
+    def _build_code_menu(self) -> None:
+        """Clic droit sur une commande : l'exécuter, la préparer, ou la copier."""
+        self._menu_code: tuple[str, str, Gtk.Button] | None = None  # (code, langue, bouton copier)
+        actions = Gio.SimpleActionGroup()
+        for name, callback in (
+            ("run", self._execute_code),
+            ("prepare", lambda: self._menu_code and self._run(self._menu_code[0])),
+            ("copy", lambda: self._menu_code and self._on_copy(self._menu_code[2], self._menu_code[0])),
+        ):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", lambda *_args, callback=callback: callback())
+            actions.add_action(action)
+        self.card.insert_action_group("code", actions)
+        model = Gio.Menu()
+        model.append("Exécuter dans un terminal", "code.run")
+        model.append("Préparer dans un terminal, sans lancer", "code.prepare")
+        model.append("Copier", "code.copy")
+        self.code_menu = Gtk.PopoverMenu.new_from_model(model)
+        self.code_menu.set_has_arrow(False)
+        self.code_menu.set_parent(self.card)
 
     def _permission_widget(self) -> Gtk.Widget:
         """Action sensible : ce qu'il veut faire, en entier, et tes trois réponses."""
@@ -396,11 +420,12 @@ class Bubble:
         self.close()
         return True
 
-    def _code_widget(self, code: str, command: bool = False) -> Gtk.Widget:
+    def _code_widget(self, code: str, command: bool = False, language: str = "") -> Gtk.Widget:
         # Pas de retour à la ligne : une longue ligne défile horizontalement, comme dans
-        # un terminal, plutôt que d'être coupée en plein mot. Une commande s'ouvre d'un clic
-        # dans un terminal (le clic ne sert donc pas à la sélectionner : ⧉ la copie).
-        label = Gtk.Label(label=code, xalign=0, yalign=0, selectable=not command, focusable=False)
+        # un terminal, plutôt que d'être coupée en plein mot. Un clic copie le bloc entier
+        # (le texte n'est donc pas sélectionnable) ; sur une commande, le clic droit propose
+        # de l'exécuter dans un terminal.
+        label = Gtk.Label(label=code, xalign=0, yalign=0, focusable=False)
         label.add_css_class("code")
         scroller = Gtk.ScrolledWindow(
             hscrollbar_policy=Gtk.PolicyType.AUTOMATIC, vscrollbar_policy=Gtk.PolicyType.NEVER
@@ -414,17 +439,38 @@ class Bubble:
         block = Gtk.Overlay(child=scroller)
         block.add_overlay(copy)
         block.add_css_class("codeblock")
+        scroller.set_cursor_from_name("pointer")
+        scroller.set_tooltip_text("Clic : copier · clic droit : exécuter dans un terminal" if command else "Clic : copier")
+        click = Gtk.GestureClick()
+        click.connect("released", lambda *_args: self._on_copy(copy, code))
+        scroller.add_controller(click)
         if command:
             block.add_css_class("command")
-            scroller.set_cursor_from_name("pointer")
-            scroller.set_tooltip_text("Ouvrir dans un terminal, prête à lancer")
-            click = Gtk.GestureClick()
-            click.connect("released", lambda *_args: self._run(code))
-            scroller.add_controller(click)
+            right_click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+            right_click.connect(
+                "pressed", lambda _gesture, _n, x, y: self._show_code_menu(scroller, x, y, (code, language, copy))
+            )
+            scroller.add_controller(right_click)
         return block
 
+    def _show_code_menu(self, widget: Gtk.Widget, x: float, y: float, code: tuple[str, str, Gtk.Button]) -> None:
+        self._menu_code = code
+        found, point = widget.compute_point(self.card, Graphene.Point().init(x, y))
+        target = Gdk.Rectangle()
+        target.x, target.y = (int(point.x), int(point.y)) if found else (0, 0)
+        target.width = target.height = 1
+        self.code_menu.set_pointing_to(target)
+        self.code_menu.popup()
+
+    def _execute_code(self) -> None:
+        """« Exécuter » : la commande est lancée dans un terminal, et la carte se ferme."""
+        if self._menu_code:
+            code, language, _copy = self._menu_code
+            self.on_execute(markdown.runnable(code), language)
+            self.close()
+
     def _run(self, code: str) -> None:
-        """Clic sur une commande : un terminal s'ouvre avec elle tapée, et la carte se ferme."""
+        """« Préparer » : un terminal s'ouvre avec la commande tapée, et la carte se ferme."""
         self.on_run(markdown.runnable(code))
         self.close()
 
@@ -694,9 +740,9 @@ class Bubble:
 
     def _answer_widgets(self, answer: str) -> list[Gtk.Widget]:
         widgets = []
-        for kind, content in markdown.blocks(answer):
+        for kind, content, language in markdown.blocks(answer):
             if kind in ("code", "command"):
-                widgets.append(self._code_widget(content, command=kind == "command"))
+                widgets.append(self._code_widget(content, command=kind == "command", language=language))
             elif kind == "table":
                 widgets.append(self._table_widget(content))
             else:

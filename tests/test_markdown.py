@@ -1,6 +1,12 @@
 import pytest
 
-from custos.ui.markdown import blocks, runnable, table_markup, to_pango, valid
+from custos.ui import markdown
+from custos.ui.markdown import runnable, table_markup, to_pango, valid
+
+
+def blocks(text: str) -> list[tuple[str, str]]:
+    """(type, contenu) de chaque morceau, sans la langue (voir test_blocks_keep_the_language)."""
+    return [(block.kind, block.content) for block in markdown.blocks(text)]
 
 ANSWER = "Utilise **df** :\n\n```bash\ndf -h\n```\n\n- `-h` : tailles lisibles\n- `/` : racine"
 
@@ -121,3 +127,11 @@ def test_only_shell_blocks_are_commands() -> None:
 def test_console_prompts_and_output_are_dropped() -> None:
     assert runnable("$ df -h\nSys. de fichiers  Taille\n$ free -h") == "df -h\nfree -h"
     assert runnable("df -h\n") == "df -h"
+
+
+def test_blocks_keep_the_language() -> None:
+    assert markdown.blocks("Voici :\n```bash\nfor f in *; do echo $f; done\n```") == [
+        markdown.Block("text", "Voici :"),
+        markdown.Block("command", "for f in *; do echo $f; done", "bash"),
+    ]
+    assert markdown.blocks("```\nls\n```")[0].language == ""

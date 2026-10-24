@@ -92,6 +92,11 @@ les 10 minutes reprend la conversation ; le bouton + en démarre une nouvelle. L
 ouvre la conversation complète en grand : Claude Code dans un terminal, avec
 `claude --resume`. Un clic en dehors de la carte, Échap ou ✕ la ferment.
 
+Un clic sur un bloc de code de la réponse le copie en entier. Sur un bloc de commandes, le
+clic droit propose de l'**exécuter dans un terminal** (qui reste ouvert sur le résultat), de
+l'y **préparer sans la lancer** (à valider toi-même, par exemple pour `sudo`), ou de la copier.
+Un bloc ```` ```bash ```` est lancé avec bash, même si ton shell est fish.
+
 Dans la carte, tape `/` pour les commandes : `/h` (ou `/historique`) liste tes dernières
 conversations, `/h caté` les filtre, ↑ ↓ et Entrée en rouvrent une, prête pour la suite ;
 `/vite …` pose cette question seulement avec Sonnet (plus rapide, moins de quota ; `fast_model`

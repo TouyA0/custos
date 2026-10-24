@@ -272,6 +272,7 @@ class MascotOverlay:
             on_history=lambda query: app.on_history(query),
             on_open_history=lambda session: app.on_open_history(session),
             on_run=lambda command: app.on_run(command),
+            on_execute=lambda command, language: app.on_execute(command, language),
             on_paste_image=lambda: app.on_paste_image(),
             on_image=lambda path, temporary: app.on_image(path, temporary),
             on_remove_attachments=lambda: app.on_remove_attachments(),
@@ -688,6 +689,7 @@ class OverlayUI:
         ).start()
         self.app.on_open_full = daemon.open_full
         self.app.on_run = daemon.run_in_terminal
+        self.app.on_execute = daemon.execute_in_terminal
         self.app.on_menu = daemon.tray_menu
         self.app.commands = daemon.commands  # tes commandes « / », proposées dans la carte
         # Lire et convertir une image prend un instant : hors du thread GTK.
@@ -806,6 +808,7 @@ class MascotApp(Gtk.Application):
         self.on_history: Callable[[str], list[tuple[str, str, str]]] = lambda query: []
         self.on_open_history: Callable[[str], None] = lambda session: None
         self.on_run: Callable[[str], None] = lambda command: None
+        self.on_execute: Callable[[str, str], None] = lambda command, language: None
         self.on_menu: Callable[[], list] = list  # entrées du daemon pour le menu de l'icône
         self.on_paste_image: Callable[[], None] = lambda: None
         self.on_image: Callable[[Path, bool], None] = lambda path, temporary: None
