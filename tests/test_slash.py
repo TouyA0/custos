@@ -26,3 +26,11 @@ def test_fast_command() -> None:
     command, rest = slash.parse("/vite c'est quoi ls -la ?")
     assert command.action == slash.FAST and rest == "c'est quoi ls -la ?"
     assert slash.parse("/v")[0].action == slash.FAST
+
+
+def test_replay_and_copy_commands() -> None:
+    assert slash.parse("/r")[0].action == slash.REPLAY
+    assert slash.parse("/rejouer")[0].action == slash.REPLAY
+    assert slash.parse("/c")[0].action == slash.COPY
+    assert slash.parse("/copie")[0].action == slash.COPY
+    assert [c.name for c in slash.completions("/c")] == ["copie"]

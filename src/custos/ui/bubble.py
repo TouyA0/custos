@@ -802,7 +802,7 @@ class Bubble:
                 self._pick(row.get_index())
             return
         parsed = slash.parse(entry.get_text())
-        if parsed and parsed[0].action in (slash.NEW, slash.OPEN):
+        if parsed and parsed[0].action in (slash.NEW, slash.OPEN, slash.COPY):
             self._run(parsed[0].action)
             return
         self.on_submit(entry.get_text())  # `/vite …` compris : c'est une question (voir daemon)
@@ -873,6 +873,24 @@ class Bubble:
             self.on_new()
         elif action == slash.OPEN:
             self.on_open_full()
+        elif action == slash.REPLAY:
+            self.on_submit("/r")  # le daemon sait quelle était la dernière question
+        elif action == slash.COPY:
+            self._copy_answer()
+
+    def _copy_answer(self) -> None:
+        """`/copie` : la dernière réponse entière, en Markdown ; le champ le confirme."""
+        if not self.answer.strip():
+            self._show_error("Pas encore de réponse à copier.")
+            return
+        if not clipboard.copy(self.answer.strip()):
+            self._show_error("Je n'arrive pas à copier.")
+            return
+        placeholder = self.entry.get_placeholder_text()
+        self.entry.set_placeholder_text("Réponse copiée")
+        GLib.timeout_add(
+            COPIED_FEEDBACK, lambda: self.entry.set_placeholder_text(placeholder) or GLib.SOURCE_REMOVE
+        )
 
     def _move_selection(self, step: int) -> None:
         row = self.suggestions.get_selected_row()

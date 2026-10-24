@@ -1277,3 +1277,33 @@ def test_attachments_can_be_removed(monkeypatch, ui, tmp_path) -> None:
     d.add_image(tmp_path / "source.png")
     d.remove_attachments()
     assert ui.attachments[-1] == 0 and not image.exists() and d.session.context.attachments == []
+
+
+def test_replay_asks_the_last_question_again(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("/r")
+    assert ui.errors == ["Pas encore de question à reposer."] and prompts == []
+    d.answer("/vite c'est quoi fstab ?")
+    d.answer("/r")
+    assert prompts[-1][0] == "c'est quoi fstab ?"  # suivi : juste la question
+    assert ui.questions[-1] == "c'est quoi fstab ? · sonnet"  # même modèle rapide
+
+
+def test_replay_after_a_failed_question(monkeypatch, ui) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    calls: list[str] = []
+
+    def failing_then_ok(prompt, *_args, **_kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            raise claude.ClaudeError("pas de réponse après 120 s")
+        yield "ok"
+
+    monkeypatch.setattr(claude, "ask", failing_then_ok)
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("pourquoi ça crashe ?")
+    d.answer("/r")
+    assert calls[1].endswith("Question : pourquoi ça crashe ?") and ui.answers[-1] == "ok"

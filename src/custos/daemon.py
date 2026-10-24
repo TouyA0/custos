@@ -134,6 +134,7 @@ class Session:
     summary: str = ""  # ce que Custos a lu, affiché en haut de la carte
     last_question: str = ""
     last_answer: str = ""
+    last_asked: tuple[str, str | None] | None = None  # (question, modèle) pour `/r`, même ratée
     # Questions et réponses déjà finies, dans l'ordre : la carte montre les précédentes au-dessus.
     exchanges: list[tuple[str, str]] = field(default_factory=list)
     always: set[tuple[str, str]] = field(default_factory=set)  # actions autorisées « toujours »
@@ -620,6 +621,13 @@ class Daemon:
         # `/vite …` : cette question seulement, avec le modèle rapide (fast_model).
         model = None
         parsed = slash.parse(question.strip())
+        if parsed and parsed[0].action == slash.REPLAY:
+            # `/r` : la dernière question, avec le même modèle (même si elle a échoué).
+            if session.last_asked is None:
+                self.ui.show_error("Pas encore de question à reposer.")
+                return None
+            question, model = session.last_asked
+            parsed = None
         if parsed and parsed[0].action == slash.FAST:
             model, question = self.config.claude.fast_model, parsed[1]
             if not question and not context.default_question(ctx):
@@ -633,6 +641,7 @@ class Daemon:
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
             return None
         self._cancel.clear()
+        session.last_asked = (question, model)
         work = self.work = Work(question)
         agent = self.config.claude.tools and getattr(self.ui, "interactive", True)
         # Première question : avec le contexte (fenêtre, sélection, capture). Les suivantes
