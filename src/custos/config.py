@@ -89,6 +89,9 @@ class SystemConfig:
     updates: bool = True  # une erreur dans une mise à jour (pacman.log)
     crashes: bool = True  # une appli qui plante
     code: bool = True  # des erreurs dans le code à l'enregistrement (extension VS Code)
+    kernel: bool = True  # noyau mis à jour sans redémarrage (ses modules ont disparu)
+    pacnew: bool = True  # fichiers .pacnew à fusionner dans /etc
+    news: bool = True  # news Arch à lire avant la prochaine mise à jour (archlinux.org)
     ignore_units: list[str] = field(default_factory=list)  # services à ne pas surveiller
 
 

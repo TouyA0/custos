@@ -135,8 +135,17 @@ Réglages dans la section `[notice]` de la config.
 Il veille aussi sur la machine, toujours localement : un **service systemd en échec**
 (système ou utilisateur), un **disque presque plein** (moins de 5 % libres, 10 Go au plus),
 une **erreur pendant une mise à jour** (lue dans `/var/log/pacman.log`, même quand pacman
-finit « avec succès », par exemple un script d'après mise à jour qui échoue) et une **appli
-qui plante** (coredump). La mascotte s'inquiète, un badge ambre s'allume (et la pastille de
+finit « avec succès », par exemple un script d'après mise à jour qui échoue), une **appli
+qui plante** (coredump), et trois pièges d'Arch :
+- le **noyau mis à jour sans redémarrage** : ses modules ont disparu de `/usr/lib/modules`, et
+  une clé USB, un VPN ou une manette ne marchent plus jusqu'au redémarrage ;
+- des **fichiers `.pacnew`** à fusionner dans `/etc` (avec ce qui change par rapport à ta version),
+  signalés une seule fois, même après un redémarrage ;
+- une **news Arch** publiée depuis ta dernière mise à jour complète, à lire avant de lancer
+  `yay` : c'est la seule requête réseau de Custos, vers archlinux.org, toutes les 6 h. L'alerte
+  s'éteint une fois la mise à jour faite.
+
+La mascotte s'inquiète, un badge ambre s'allume (et la pastille de
 l'icône de la barre, dont le menu liste tout sous « À regarder ») ; un clic ouvre la carte
 avec les preuves déjà rassemblées (état du service et son journal, lignes d'erreur, trace
 du plantage…), secrets masqués : Entrée demande à Claude d'expliquer et de réparer. Une

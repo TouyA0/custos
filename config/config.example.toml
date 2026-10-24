@@ -69,6 +69,11 @@ disk = true      # un disque presque plein (moins de 5 % libres, 10 Go au plus)
 updates = true   # une erreur pendant une mise à jour, même quand pacman finit « avec succès »
 crashes = true   # une appli qui plante
 code = true      # erreurs du code à l'enregistrement (extension VS Code, integrations/vscode)
+kernel = true    # noyau mis à jour sans redémarrage : clés USB, VPN… ne marchent plus d'ici là
+pacnew = true    # fichiers .pacnew laissés dans /etc par une mise à jour, à fusionner
+# News Arch publiées depuis ta dernière mise à jour complète, à lire avant la prochaine. Seule
+# requête réseau de Custos : il lit https://archlinux.org/feeds/news/ toutes les 6 h.
+news = true
 ignore_units = []  # services à ignorer, par exemple ["NetworkManager-wait-online.service"]
 
 [commands]
