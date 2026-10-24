@@ -9,7 +9,9 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
 from typing import Protocol
 
@@ -126,7 +128,23 @@ class Session:
     always: set[tuple[str, str]] = field(default_factory=set)  # actions autorisées « toujours »
 
 
+def _locked[**P, R](method: Callable[P, R]) -> Callable[P, R]:
+    """Méthode du daemon appelée depuis un autre thread : elle prend le verrou de son état."""
+
+    @wraps(method)
+    def run(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return run
+
+
 class Daemon:
+    """Le daemon est appelé depuis plusieurs threads : messages (socket), surveillance,
+    événements Hyprland, GTK, et celui de la réponse. Son état (session, travail en cours,
+    badge, agents…) est protégé par un seul verrou, pris par chaque point d'entrée
+    (`_locked`) et jamais gardé pendant une attente : réponse de Claude, ton accord."""
+
     def __init__(self, config: Config, ui: UI) -> None:
         self.config = config
         self.ui = ui
@@ -146,6 +164,7 @@ class Daemon:
         self.agents: dict[str, Agent] = {}  # sessions Claude Code, par identifiant
         self.work: Work | None = None  # question en cours de traitement
         self.card_open = False  # la carte est affichée (sinon le travail continue en fond)
+        self._lock = threading.RLock()  # l'état ci-dessus (voir la docstring de la classe)
 
     def handle(self, message: dict) -> None:
         match message.get("type"):
@@ -174,12 +193,19 @@ class Daemon:
         Sans rien de nouveau à montrer (ni question, sélection, image, erreur ou fenêtre
         accrochée), rouvrir la carte peu après reprend la conversation précédente.
         """
+        with self._lock:
+            question = self._open(message)
+        if question:
+            self.answer(question)  # sans le verrou : la réponse peut être longue
+
+    def _open(self, message: dict) -> str | None:
+        """Lit le contexte et ouvre la carte ; renvoie la question à poser, s'il y en a une."""
         if self.work:
             self._show_work()  # il travaille encore : la carte reprend là où il en est
-            return
+            return None
         if self._can_resume(message):
             self._reopen()
-            return
+            return None
         image = message.get("image")
         target = self._attached_window(message)
         ctx = context.collect(
@@ -194,15 +220,15 @@ class Daemon:
         )
         if ctx.blocked:
             self.ui.show_error("Cette fenêtre est protégée : je n'ai rien lu.")
-            return
+            return None
 
         self.close_session()
         self.session = Session(ctx, summary=context.describe(ctx))
         if message.get("question"):
-            self.answer(message["question"])
-        else:
-            self.card_open = True
-            self.ui.open_prompt(self.session.summary, context.hint(ctx))
+            return message["question"]
+        self.card_open = True
+        self.ui.open_prompt(self.session.summary, context.hint(ctx))
+        return None
 
     def _reopen(self) -> None:
         session = self.session
@@ -231,11 +257,13 @@ class Daemon:
             and time.monotonic() - self._closed_at < RESUME_WINDOW
         )
 
+    @_locked
     def new_conversation(self) -> None:
         """Bouton ＋ : oublie la conversation en cours et en commence une nouvelle."""
         self.close_session()
         self.ask({"type": "ask", "new": True})
 
+    @_locked
     def close_bubble(self) -> None:
         """Carte fermée : le travail en cours continue en fond (■ l'arrête), et la
         conversation reste un moment pour la reprendre."""
@@ -252,6 +280,7 @@ class Daemon:
         """`/h …` dans la carte : (session, quand, première question) des plus récentes."""
         return [(c.session, history.when(c.updated), c.title) for c in history.search(query)]
 
+    @_locked
     def open_history(self, session_id: str) -> None:
         """Conversation choisie dans `/h` : rouverte dans la carte, prête pour la suite."""
         if self.work:
@@ -275,6 +304,7 @@ class Daemon:
         """Bouton ■ : arrête la réponse ou la tâche en cours."""
         self._cancel.set()
 
+    @_locked
     def permission_answer(self, choice: str) -> None:
         """Ta réponse à une demande de permission (boutons de la carte)."""
         work = self.work
@@ -282,6 +312,7 @@ class Daemon:
             work.choice = choice
             work.answered.set()
 
+    @_locked
     def open_from_mascot(self) -> None:
         """Clic sur la mascotte : propose d'abord ce qu'elle vient de remarquer.
 
@@ -325,6 +356,7 @@ class Daemon:
         else:
             self.ask({"type": "ask"})
 
+    @_locked
     def on_watch_event(self, kind: str, path: str | None = None) -> None:
         """Changement de sélection, image copiée ou capture : allume le badge (sans appeler Claude)."""
         # Carte ouverte : on ne dérange pas (et sa propre sélection ne compte pas). La
@@ -353,6 +385,7 @@ class Daemon:
             return None
         return hyprland.find_window(self.attached)
 
+    @_locked
     def attach_active(self) -> None:
         """`custos attach` : accroche la mascotte à la fenêtre active."""
         window = hyprland.active_window()
@@ -361,6 +394,7 @@ class Daemon:
             return
         self.ui.attach(window)  # l'overlay rappelle set_attached une fois accrochée
 
+    @_locked
     def set_attached(self, window: hyprland.ActiveWindow | None) -> None:
         """Appelé par l'overlay quand la mascotte s'accroche ou se détache."""
         if window and privacy.is_blocked(window.window_class, window.title, self.config.privacy):
@@ -370,11 +404,13 @@ class Daemon:
         self.attached = window.address if window else None
         log.info("accrochée à une fenêtre" if window else "détachée")
 
+    @_locked
     def set_monitor(self, name: str) -> None:
         """Appelé par l'overlay quand la mascotte change d'écran."""
         self.monitor = name
         self.on_hyprland_event("fullscreen")
 
+    @_locked
     def on_hyprland_event(self, name: str, data: str = "") -> None:
         """Masque la mascotte tant qu'une fenêtre est en plein écran (vidéo, jeu…) sur son écran.
 
@@ -424,6 +460,7 @@ class Daemon:
 
     # --- sessions Claude Code ------------------------------------------------------
 
+    @_locked
     def agent_event(self, message: dict) -> None:
         """Hook d'une session Claude Code : elle travaille, attend, a fini ou se ferme."""
         if not self.config.agents.enabled:
@@ -509,6 +546,59 @@ class Daemon:
             self.session = None
 
     def answer(self, question: str) -> None:
+        """Pose la question à Claude et affiche la réponse au fil de l'eau (dans son propre
+        thread : appelée sans le verrou, elle ne le prend que pour toucher à l'état)."""
+        with self._lock:
+            started = self._start_work(question)
+        if started is None:
+            return
+        session, work, prompt, images, agent, model = started
+        try:
+            begin = time.monotonic()
+
+            def remember(session_id: str) -> None:
+                with self._lock:
+                    session.claude_session = session_id
+
+            def on_tool(step: str) -> None:
+                # Le texte d'avant n'était qu'un commentaire : la bulle ne garde que la conclusion.
+                with self._lock:
+                    work.status, work.chunks = step, []
+                    self.ui.reset_answer()
+                    self.ui.set_status(step)
+
+            for chunk in claude.ask(
+                prompt,
+                self.config.claude,
+                images=images,
+                system_prompt=self._system_prompt(agent),
+                resume=session.claude_session,
+                on_session=remember,
+                cancel=self._cancel,
+                agent=agent,
+                on_tool=on_tool,
+                on_permission=lambda permission: self._ask_permission(session, work, permission),
+                model=model,
+            ):
+                with self._lock:
+                    work.chunks.append(chunk)
+                    self.ui.append_answer(chunk)
+            with self._lock:
+                self._end_work(session, work, begin)
+        except claude.ClaudeError as exc:
+            log.warning("erreur Claude : %s", exc)
+            with self._lock:
+                self.ui.set_state(MascotState.IDLE)
+                self.ui.show_error(str(exc))
+        finally:
+            with self._lock:
+                self.work = None
+                self._busy.release()
+                self._show_badge()
+
+    def _start_work(self, question: str):
+        """Début d'une réponse (sous le verrou) : de quoi interroger Claude, ou None si
+        la question est vide ou qu'il réfléchit déjà."""
         session = self.session or Session(Context())
         self.session = session
         ctx = session.context
@@ -519,106 +609,77 @@ class Daemon:
             model, question = self.config.claude.fast_model, parsed[1]
             if not question and not context.default_question(ctx):
                 self.ui.show_error("Écris ta question après /vite.")
-                return
+                return None
         question = question.strip() or context.default_question(ctx) or ""
         if not question:
             self.ui.show_error("Écris ta question.")
-            return
+            return None
         if not self._busy.acquire(blocking=False):
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
-            return
+            return None
         self._cancel.clear()
         work = self.work = Work(question)
         agent = self.config.claude.tools and getattr(self.ui, "interactive", True)
-        try:
-            # Première question : avec le contexte (fenêtre, sélection, capture). Les suivantes
-            # reprennent la session Claude, qui a déjà tout ça : juste la question.
-            resume = session.claude_session
-            prompt = question if resume else context.build_prompt(question, ctx)
-            images = [ctx.screenshot] if ctx.screenshot and not resume else None
-            log.info(
-                "question (sélection : %d car., capture : %s, suivi : %s, outils : %s, modèle : %s)",
-                len(ctx.selection),
-                "oui" if images else "non",
-                "oui" if resume else "non",
-                "oui" if agent else "non",
-                model or self.config.claude.model,
-            )
-            self.ui.set_state(MascotState.THINKING)
-            self.card_open = True
-            self.ui.start_answer(f"{question} · {short_model(model)}" if model else question)
-            started = time.monotonic()
+        # Première question : avec le contexte (fenêtre, sélection, capture). Les suivantes
+        # reprennent la session Claude, qui a déjà tout ça : juste la question.
+        resume = session.claude_session
+        prompt = question if resume else context.build_prompt(question, ctx)
+        images = [ctx.screenshot] if ctx.screenshot and not resume else None
+        log.info(
+            "question (sélection : %d car., capture : %s, suivi : %s, outils : %s, modèle : %s)",
+            len(ctx.selection),
+            "oui" if images else "non",
+            "oui" if resume else "non",
+            "oui" if agent else "non",
+            model or self.config.claude.model,
+        )
+        self.ui.set_state(MascotState.THINKING)
+        self.card_open = True
+        self.ui.start_answer(f"{question} · {short_model(model)}" if model else question)
+        return session, work, prompt, images, agent, model
 
-            def remember(session_id: str) -> None:
-                session.claude_session = session_id
-
-            def on_tool(step: str) -> None:
-                # Le texte d'avant n'était qu'un commentaire : la bulle ne garde que la conclusion.
-                work.status, work.chunks = step, []
-                self.ui.reset_answer()
-                self.ui.set_status(step)
-
-            for chunk in claude.ask(
-                prompt,
-                self.config.claude,
-                images=images,
-                system_prompt=self._system_prompt(agent),
-                resume=resume,
-                on_session=remember,
-                cancel=self._cancel,
-                agent=agent,
-                on_tool=on_tool,
-                on_permission=lambda permission: self._ask_permission(session, work, permission),
-                model=model,
-            ):
-                work.chunks.append(chunk)
-                self.ui.append_answer(chunk)
-            ctx.cleanup()  # la capture n'est envoyée qu'avec la première question
-            if self._cancel.is_set():
-                log.info("réponse interrompue")
-                self.ui.set_state(MascotState.IDLE)
-                self.ui.end_answer("".join(work.chunks).strip() or "Arrêté.")
-                return
-            answer = "".join(work.chunks).strip()
-            log.info("réponse en %.1f s (%d car.)", time.monotonic() - started, len(answer))
-
-            session.last_question, session.last_answer = question, answer
-            self.ui.end_answer(answer)
-            self.ui.set_state(MascotState.TALKING if self.card_open else MascotState.IDLE)
-            if not self.card_open:
-                # Finie carte fermée : ✅ jusqu'à ce que tu cliques pour la lire.
-                self.notice = Notice(ANSWER_READY, time.monotonic())
-        except claude.ClaudeError as exc:
-            log.warning("erreur Claude : %s", exc)
+    def _end_work(self, session: Session, work: Work, begin: float) -> None:
+        """Réponse finie ou interrompue (sous le verrou)."""
+        session.context.cleanup()  # la capture n'est envoyée qu'avec la première question
+        if self._cancel.is_set():
+            log.info("réponse interrompue")
             self.ui.set_state(MascotState.IDLE)
-            self.ui.show_error(str(exc))
-        finally:
-            self.work = None
-            self._busy.release()
-            self._show_badge()
+            self.ui.end_answer("".join(work.chunks).strip() or "Arrêté.")
+            return
+        answer = "".join(work.chunks).strip()
+        log.info("réponse en %.1f s (%d car.)", time.monotonic() - begin, len(answer))
+
+        session.last_question, session.last_answer = work.question, answer
+        self.ui.end_answer(answer)
+        self.ui.set_state(MascotState.TALKING if self.card_open else MascotState.IDLE)
+        if not self.card_open:
+            # Finie carte fermée : ✅ jusqu'à ce que tu cliques pour la lire.
+            self.notice = Notice(ANSWER_READY, time.monotonic())
 
     def _ask_permission(self, session: Session, work: Work, permission: claude.Permission) -> str:
         """Action sensible : on attend ta réponse dans la carte (✋ sur la mascotte si elle
-        est fermée). Appelé dans le thread de la réponse, qui attend ici."""
+        est fermée). Appelé dans le thread de la réponse, qui attend ici, sans le verrou."""
         key = (permission.tool, permission.description)
-        if key in session.always:
-            return claude.ALLOW
-        log.info("permission demandée (%s)", permission.tool)
-        work.answered.clear()
-        work.permission = permission
-        self.ui.ask_permission(permission.description)
-        self._show_badge()
+        with self._lock:
+            if key in session.always:
+                return claude.ALLOW
+            log.info("permission demandée (%s)", permission.tool)
+            work.answered.clear()
+            work.permission = permission
+            self.ui.ask_permission(permission.description)
+            self._show_badge()
         while not work.answered.wait(0.2):
             if self._cancel.is_set():
                 work.choice = claude.DENY
                 break
-        work.permission = None
-        self.ui.permission_done()
-        self._show_badge()
-        if work.choice == claude.ALWAYS:
-            session.always.add(key)
-        log.info("permission : %s", work.choice)
-        return work.choice
+        with self._lock:
+            work.permission = None
+            self.ui.permission_done()
+            self._show_badge()
+            if work.choice == claude.ALWAYS:
+                session.always.add(key)
+            log.info("permission : %s", work.choice)
+            return work.choice
 
     def _system_prompt(self, agent: bool = False) -> str:
         """Machine détectée une fois ; custos.md relu à chaque question (modifiable à chaud)."""
@@ -626,6 +687,7 @@ class Daemon:
             self._machine = machine.describe(self.config.claude.open_command)
         return claude.build_system_prompt(self._machine, load_persona(), agent)
 
+    @_locked
     def open_full(self) -> None:
         """Ouvre la conversation en cours en grand : Claude Code dans un terminal."""
         session_id = self.session.claude_session if self.session else None
@@ -651,6 +713,7 @@ class Daemon:
             return
         log.info("conversation ouverte en grand")
 
+    @_locked
     def shell_event(self, message: dict) -> None:
         # Réaction locale uniquement : Claude n'est pas appelé ici.
         exit_code = message.get("exit_code", 0)
@@ -668,6 +731,7 @@ class Daemon:
             ):
                 _later(OUTPUT_DELAY, self._request_output, window.address)
 
+    @_locked
     def _request_output(self, address: str) -> None:
         """Demande au terminal la sortie de la dernière commande (réponse : `shell-output`).
 
@@ -677,6 +741,7 @@ class Daemon:
         if not hyprland.send_shortcut(*OUTPUT_SHORTCUT, address):
             log.warning("impossible de demander la sortie de la commande au terminal")
 
+    @_locked
     def shell_output(self, message: dict) -> None:
         """Sortie de la commande en échec, envoyée par le terminal via `custos shell-output`."""
         requested = self._output_requested_at

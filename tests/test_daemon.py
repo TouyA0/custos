@@ -1,4 +1,5 @@
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1063,3 +1064,72 @@ def test_tray_alert_for_custos_waiting_with_card_closed(monkeypatch, ui) -> None
     d.permission_answer(claude.DENY)
     worker.join(2)
     assert ui.alerts[-1] == ("done", "Custos a fini : range")
+
+
+# --- plusieurs threads ---------------------------------------------------------------
+
+
+def _in_thread(action, timeout: float = 2.0) -> bool:
+    """Lance `action` dans un autre thread : True si elle a fini à temps (pas bloquée)."""
+    thread = threading.Thread(target=action, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    return not thread.is_alive()
+
+
+def test_state_is_free_while_claude_answers(monkeypatch, ui, agents) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    free: list[bool] = []
+
+    def slow_ask(*_args, **_kwargs):
+        yield "Bon"
+        # Pendant la réponse, les autres threads touchent à l'état sans attendre.
+        free.append(_in_thread(lambda: d.handle(agent("Stop"))))
+        free.append(_in_thread(d.close_bubble))
+        yield "jour"
+
+    monkeypatch.setattr(claude, "ask", slow_ask)
+    d.handle({"type": "ask", "question": "salut ?"})
+    assert free == [True, True]
+    assert ui.answers == ["Bonjour"]
+
+
+def test_state_is_free_while_waiting_for_permission(monkeypatch, ui) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    choices: list[str] = []
+
+    def asking(*_args, on_permission=None, **_kwargs):
+        choices.append(on_permission(claude.Permission("Bash", {"command": "rm x"})))
+        yield "fait"
+
+    monkeypatch.setattr(claude, "ask", asking)
+    answering = threading.Thread(target=d.answer, args=("range",), daemon=True)
+    answering.start()
+    while d.work is None or d.work.permission is None:
+        time.sleep(0.01)
+    assert _in_thread(lambda: d.permission_answer(claude.ALLOW))  # le bouton de la carte
+    answering.join(2)
+    assert choices == [claude.ALLOW]
+
+
+def test_agents_from_many_threads(ui, agents) -> None:
+    d = daemon.Daemon(Config(), ui)
+    errors: list[Exception] = []
+
+    def burst(n: int) -> None:
+        try:
+            for i in range(1000):
+                event = "Notification" if i % 2 else "Stop"
+                d.handle(agent(event, session=f"s{n}-{i % 7}", notification="permission_prompt"))
+                d.handle(agent("SessionEnd", session=f"s{n}-{i % 5}"))
+        except RuntimeError as exc:  # « dictionary changed size during iteration »
+            errors.append(exc)
+
+    threads = [threading.Thread(target=burst, args=(n,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
