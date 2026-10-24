@@ -44,7 +44,7 @@ def test_custom_commands() -> None:
     assert command is traduis and rest == "good morning"
     assert slash.parse("/résume", custom)[0].fast is True
     assert slash.parse("/traduis") is None  # sans la config : une question ordinaire
-    assert [c.name for c in slash.completions("/r", custom)] == ["rejouer", "résume"]
+    assert [c.name for c in slash.completions("/r", custom)] == ["rejouer", "rappel", "résume"]
     assert slash.completions("/", custom)[-2:] == custom
 
 

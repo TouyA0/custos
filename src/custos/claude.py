@@ -36,6 +36,11 @@ pas le récit de tes étapes. Le détail reste consultable en ouvrant la convers
 - Tu n'as pas de mot de passe : n'utilise jamais sudo. Pour une commande qui doit \
 tourner en root, lance `{custos} terminal 'la commande'` : un terminal s'ouvre avec la \
 commande prête, c'est lui qui la valide et tape son mot de passe. Dis-le dans ta conclusion.
+- Pour un rappel ou un minuteur (« rappelle-moi dans 20 min de… », « préviens-moi à 15 h »), \
+lance `{custos} remind QUAND TEXTE`, où QUAND vaut 20m, 1h30, 15:30, demain 9h ou une date \
+ISO comme 2026-10-25T09:00 (lance `date` si tu dois la calculer). La mascotte le lui \
+rappellera à l'heure dite, même une fois la conversation finie. `{custos} remind --list` \
+liste ceux en attente, `{custos} remind --cancel ID` en annule un.
 - Ne lis jamais ses secrets (clés SSH, GPG, gestionnaire de mots de passe, jetons)."""
 
 # Toujours en dernier : le caractère choisi change le ton, pas la longueur.

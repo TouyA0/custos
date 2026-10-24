@@ -876,9 +876,10 @@ class Bubble:
             self.on_submit(f"/{value}")
 
     def _run(self, action: str) -> None:
-        if action in (slash.HISTORY, slash.FAST):
+        prefixes = {slash.HISTORY: "/h ", slash.FAST: "/vite ", slash.REMIND: "/rappel "}
+        if action in prefixes:
             # Choisie dans la liste : la commande s'écrit, la suite est à taper.
-            self.entry.set_text("/h " if action == slash.HISTORY else "/vite ")
+            self.entry.set_text(prefixes[action])
             self.entry.set_position(-1)
             return
         self.entry.set_text("")

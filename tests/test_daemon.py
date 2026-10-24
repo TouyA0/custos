@@ -110,6 +110,15 @@ def no_machine(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(daemon, "load_persona", lambda: "")
 
 
+@pytest.fixture(autouse=True)
+def notified(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[tuple[str, str]]:
+    """Rappels et quota dans un dossier à part, et notifications notées au lieu d'affichées."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(daemon, "notify", lambda title, body: sent.append((title, body)))
+    return sent
+
+
 @pytest.fixture
 def ui() -> FakeUI:
     return FakeUI()
@@ -1082,6 +1091,66 @@ def test_custom_command_sends_its_prompt(monkeypatch, ui) -> None:
         "/résume plutôt en une phrase · sonnet",
     ]
     assert d.session.exchanges[0][0] == "/traduis"
+
+
+def test_reminder_rings_then_shows_in_the_card(ui, notified) -> None:
+    d = daemon.Daemon(Config(), ui)
+    now = time.time()
+    d.handle({"type": "remind", "id": "a1", "at": now + 60, "text": "sortir le linge"})
+    d.handle({"type": "remind", "id": "b2", "at": now + 3600, "text": "appeler maman"})
+    d.handle({"type": "remind", "id": "zz", "at": "bientôt", "text": "illisible"})
+    assert [r.id for r in daemon.reminders.load()] == ["a1", "b2"]  # gardés sur le disque
+    d.ring_due(now)
+    assert notified == [] and daemon.REMINDER not in ui.notices
+    d.ring_due(now + 61)
+    assert notified == [("Custos — Rappel", "sortir le linge")]
+    assert ui.notices[-1] == daemon.REMINDER
+    assert ui.alerts[-1] == (daemon.ALERT_WAITING, "Rappel : sortir le linge")
+    assert [r.id for r in daemon.reminders.load()] == ["b2"]
+    d.open_from_mascot()
+    assert ui.reopened[-1][1:] == ("Rappel de " + time.strftime("%H:%M", time.localtime(now + 60)), "sortir le linge")
+    assert ui.notices[-1] is None and d.rang == []
+
+
+def test_late_reminder_says_when_it_was_due(ui, notified) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "remind", "id": "a1", "at": 1000.0, "text": "thé"})
+    d.ring_due(1000.0 + daemon.LATE_REMINDER + 1)
+    assert notified[0][0].startswith("Custos — Rappel, prévu à ")
+
+
+def test_reminders_survive_a_restart_and_can_be_cancelled(ui) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "remind", "id": "a1", "at": time.time() + 60, "text": "thé"})
+    assert [r.id for r in daemon.Daemon(Config(), FakeUI()).reminders] == ["a1"]
+    d.handle({"type": "remind-cancel", "id": "a1"})
+    assert d.reminders == [] and daemon.reminders.load() == []
+
+
+def test_remind_from_the_card_without_claude(monkeypatch, ui, prompts) -> None:
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("/rappel")
+    assert ui.reopened[-1][1:] == ("/rappel", "Aucun rappel en attente.")
+    d.answer("/rappel 20m sortir le linge")
+    assert ui.reopened[-1][2].startswith("C'est noté : je te le rappelle ")
+    assert [r.text for r in d.reminders] == ["sortir le linge"]
+    d.answer("/rappel bof")
+    assert ui.errors[-1].startswith("Je ne comprends pas")
+    d.answer("/rappel 20m")
+    assert ui.errors[-1] == "De quoi faut-il te rappeler ?"
+    d.answer("/rp")
+    assert "sortir le linge" in ui.reopened[-1][2]
+    assert prompts == []  # Claude n'a jamais été appelé
+
+
+def test_tray_menu_lists_pending_reminders(monkeypatch, ui) -> None:
+    monkeypatch.setattr(daemon.history, "search", lambda query, limit: [])
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "remind", "id": "a1", "at": time.time() + 600, "text": "thé"})
+    labels = [e[0] for e in d.tray_menu() if e]
+    assert "Rappels" in labels and any(label.endswith(" · thé") for label in labels)
 
 
 def test_short_model() -> None:

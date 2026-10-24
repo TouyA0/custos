@@ -117,6 +117,23 @@ la mascotte affiche un badge orange s'il a besoin de toi et vert quand il a fini
 où il en est. Le bouton carré l'arrête. Pour une commande en root, il t'ouvre un terminal avec la commande
 prête (`custos terminal '…'`) : c'est toi qui la valides et tapes ton mot de passe.
 
+**Rappels et minuteurs** : demande-lui « rappelle-moi dans 20 min de sortir le linge » ou
+« préviens-moi demain à 9 h », et il programme le rappel (`custos remind`). À l'heure dite, la
+mascotte se réveille avec un badge orange (et la pastille de l'icône de la barre), et une
+notification s'affiche ; un clic montre le rappel dans la carte. Sans appeler Claude :
+`/rappel 20m sortir le linge` dans la carte (`/rappel` seul les liste), ou dans un terminal :
+
+```bash
+custos remind 20m sortir le linge     # aussi 1h30, 15:30, à 15h30, demain 9h, 2026-10-25T09:00
+custos remind --list
+custos remind --cancel 3f9a2c
+```
+
+Sans « à », `1h30` est une durée ; une heure s'écrit `15:30` ou `à 15h30`. Les rappels sont
+gardés dans `~/.local/state/custos/reminders.json` : ils survivent à un redémarrage, et celui
+dont l'heure est passée pendant que Custos était arrêté sonne à son retour (« prévu à … »).
+Le menu de l'icône de la barre liste ceux en attente.
+
 Custos détecte ta machine (distribution, Hyprland, terminal, shell, caelestia, yay…) pour
 te donner des commandes qui s'y appliquent. Son caractère, et ce qu'il doit savoir de toi,
 c'est toi qui l'écris dans `~/.config/custos/custos.md` (voir `config/custos.example.md`) :
@@ -209,6 +226,7 @@ src/custos/
 ├── ipc.py          socket Unix entre les commandes et le daemon
 ├── claude.py       appels à `claude -p`
 ├── history.py      historique des conversations (fichiers de Claude Code)
+├── reminders.py    rappels et minuteurs (`custos remind`, `/rappel`)
 ├── config.py       lecture de ~/.config/custos/config.toml et custos.md
 ├── machine.py      détection de la machine (distribution, terminal, shell…)
 ├── states.py       états de la mascotte

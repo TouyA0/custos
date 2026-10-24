@@ -55,6 +55,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     terminal.add_argument("command", help="la commande à préparer")
 
+    remind = sub.add_parser(
+        "remind", help="programme un rappel : custos remind 20m sortir le linge"
+    )
+    remind.add_argument(
+        "words", nargs="*", metavar="QUAND QUOI",
+        help="20m, 1h30, 15:30, à 15h30, demain 9h ou 2026-10-25T09:00, puis le texte du rappel",
+    )
+    remind.add_argument("--list", action="store_true", help="liste les rappels en attente")
+    remind.add_argument("--cancel", metavar="ID", help="annule un rappel (identifiant de --list)")
+
     sub.add_parser(
         "agent-event",
         help="signale l'état d'une session Claude Code (hook, JSON sur l'entrée standard)",
@@ -94,6 +104,36 @@ def agent_event(raw: str) -> dict | None:
         "message": (data.get("message") or "")[:200],
         "pids": ancestors(os.getppid()),
     }
+
+
+def remind(args: argparse.Namespace) -> int:
+    """`custos remind` : lancé par toi ou par Claude, d'où des réponses en toutes lettres."""
+    from custos import reminders
+
+    pending = reminders.load()
+    if args.cancel:
+        found = next((r for r in pending if r.id == args.cancel), None)
+        if found is None:
+            print(f"custos: aucun rappel en attente avec l'identifiant {args.cancel} (voir --list)")
+            return 1
+        ipc.send({"type": "remind-cancel", "id": found.id})
+        print(f"Rappel annulé : {found.text}")
+        return 0
+    if args.list or not args.words:
+        if not pending:
+            print("Aucun rappel en attente.")
+        for r in pending:
+            print(f"{r.id}  {reminders.describe(r.at)}  {r.text}")
+        return 0
+    when, text = reminders.split(" ".join(args.words))
+    try:
+        reminder = reminders.create(when, text)
+    except reminders.WhenError as exc:
+        print(f"custos: {exc}")
+        return 1
+    ipc.send({"type": "remind", "id": reminder.id, "at": reminder.at, "text": reminder.text})
+    print(f"Rappel programmé {reminders.describe(reminder.at)} : {reminder.text} (identifiant {reminder.id})")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -140,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
 
             terminal.open_with(args.command, load().claude.open_command)
             print("Terminal ouvert : la commande y est prête, à valider par l'utilisateur.")
+        elif args.subcommand == "remind":
+            return remind(args)
         elif args.subcommand == "agent-event":
             # Appelé par Claude Code : jamais d'erreur, même sans daemon ou entrée illisible.
             message = agent_event(sys.stdin.read(MAX_OUTPUT))

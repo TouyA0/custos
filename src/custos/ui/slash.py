@@ -2,7 +2,7 @@
 
 `/h caté` rouvre une conversation passée, `/v …` pose une question avec le modèle rapide,
 `/r` repose la dernière question, `/c` copie la dernière réponse, `/n` commence une nouvelle
-conversation, `/g` l'ouvre en grand. S'y ajoutent les tiennes, écrites dans la section
+conversation, `/g` l'ouvre en grand, `/rappel 20m …` programme un rappel sans appeler Claude. S'y ajoutent les tiennes, écrites dans la section
 `[commands]` de la config (`/traduis`, `/résume`…). Ce qui n'est pas une
 commande connue (`/etc/fstab c'est quoi ?`) reste une question ordinaire.
 """
@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 HISTORY, FAST, REPLAY, COPY, NEW, OPEN = "history", "fast", "replay", "copy", "new", "open"
+REMIND = "remind"
 CUSTOM = "custom"  # une commande de la config : sa consigne devient la question
 
 
@@ -31,6 +32,7 @@ COMMANDS = [
     Command("copie", "c", "copier la dernière réponse", COPY),
     Command("nouveau", "n", "nouvelle conversation", NEW),
     Command("grand", "g", "ouvrir la conversation en grand", OPEN),
+    Command("rappel", "rp", "programmer un rappel : /rappel 20m sortir le linge", REMIND),
 ]
 
 

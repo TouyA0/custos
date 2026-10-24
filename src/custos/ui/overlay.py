@@ -65,9 +65,12 @@ BADGES = {
     "custos-waiting": ("attention", WAITING),  # carte fermée : Custos attend ton accord
     "answer-ready": ("check", FINISHED),  # carte fermée : Custos a fini
     "system-problem": ("alert", PROBLEM),  # service, disque, mise à jour, plantage, code
+    "reminder": ("bell", WAITING),  # un rappel a sonné
 }
 # Restent jusqu'à ce que tu ailles voir.
-PERSISTENT_BADGES = {"agent-waiting", "agent-done", "custos-waiting", "answer-ready", "system-problem"}
+PERSISTENT_BADGES = {
+    "agent-waiting", "agent-done", "custos-waiting", "answer-ready", "system-problem", "reminder",
+}
 
 FOLLOW_INTERVAL = 200  # ms entre deux lectures de la position de la fenêtre accrochée
 DRAG_THRESHOLD = 6  # pixels : en dessous, c'est un clic

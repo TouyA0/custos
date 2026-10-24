@@ -11,16 +11,18 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Protocol
 
-from custos import claude, context, history, ipc, machine, quota, system, terminal, watch
+from custos import claude, context, history, ipc, machine, quota, reminders, system, terminal, watch
 from custos.config import Config, load, load_persona
 from custos.context import Context, clipboard, hyprland, images, privacy
 from custos.states import MascotState
 from custos.supervisor import EXIT_ALREADY_RUNNING, setup_logging
 from custos.ui import slash
+from custos.ui.notify import notify
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +52,9 @@ ALERT_WAITING, ALERT_DONE = "waiting", "done"  # pastille de l'icône de la barr
 ALERT_PROBLEM = "problem"
 # Un problème de la machine remarqué localement (service, disque, mise à jour, plantage, code).
 SYSTEM_PROBLEM = "system-problem"
+REMINDER = "reminder"  # un rappel a sonné : reste jusqu'à ce que tu cliques
+REMINDER_CHECK = 30.0  # secondes au plus entre deux regards à l'horloge (veille, heure changée)
+LATE_REMINDER = 120.0  # secondes : au-delà, le rappel a sonné en retard (Custos arrêté, veille)
 MAX_CODE_ERRORS = 15  # erreurs du fichier jointes à la question
 OUTPUT_TIMEOUT = 5.0  # secondes : au-delà, une sortie reçue n'est plus celle demandée
 MENU_HISTORY = 6  # conversations récentes dans le menu de l'icône
@@ -187,6 +192,9 @@ class Daemon:
         # Problèmes remarqués et pas encore regardés, par clé (voir system.Problem).
         self.problems: dict[str, system.Problem] = {}
         self._code_errors: dict[str, int] = {}  # erreurs par fichier, au dernier enregistrement
+        self.reminders = reminders.load()  # en attente, du plus proche au plus lointain
+        self.rang: list[reminders.Reminder] = []  # ont sonné, pas encore vus
+        self._reminder_wake = threading.Event()  # un rappel ajouté : on recalcule l'attente
         self._lock = threading.RLock()  # l'état ci-dessus (voir la docstring de la classe)
 
     def handle(self, message: dict) -> None:
@@ -201,6 +209,10 @@ class Daemon:
                 self.agent_event(message)
             case "code-problem":
                 self.code_problem(message)
+            case "remind":
+                self.remind(message)
+            case "remind-cancel":
+                self.cancel_reminder(message.get("id", ""))
             case "attach":
                 self.attach_active()
             case "detach":
@@ -349,7 +361,7 @@ class Daemon:
         Par ordre de priorité : une commande qui vient d'échouer, un problème de la machine
         (service, disque, mise à jour, plantage, code), une sélection ou une image remarquée,
         sinon une bulle vide. Avant tout ça : un agent Claude Code qui attend ou qui a fini,
-        dont elle affiche la fenêtre.
+        dont elle affiche la fenêtre, et un rappel qui a sonné.
         """
         if self.work:
             self._show_work()  # sa propre tâche d'abord : elle attend peut-être ton accord
@@ -357,6 +369,9 @@ class Daemon:
         waiting = self._waiting_agent()
         if waiting:
             self._go_to_agent(waiting)  # le plus urgent : un agent est bloqué
+            return
+        if self.rang:
+            self._show_rang()  # puis l'heure dite : un rappel qui a sonné
             return
         if self.notice and self.notice.kind == ANSWER_READY and self.session:
             self._reopen()  # la réponse finie pendant que la carte était fermée
@@ -481,6 +496,10 @@ class Daemon:
         elif waiting:
             kind = AGENT_WAITING
             alert, text = ALERT_WAITING, f"Claude Code ({waiting.project}) attend ta permission"
+        elif self.rang:
+            kind = REMINDER
+            more = len(self.rang) - 1
+            alert, text = ALERT_WAITING, f"Rappel : {_short(self.rang[-1].text)}" + (f" (+{more})" if more else "")
         elif self.problems:
             kind = SYSTEM_PROBLEM
             latest = next(reversed(self.problems.values()))
@@ -495,6 +514,91 @@ class Daemon:
                 alert, text = ALERT_DONE, f"Custos a fini : {_short(self.session.last_question)}"
         self.ui.show_notice(kind)
         self.ui.set_alert(alert, text)
+
+    # --- rappels (voir reminders.py) ---------------------------------------------------
+
+    @_locked
+    def remind(self, message: dict) -> None:
+        """`custos remind` (toi ou Claude) : un rappel de plus, gardé sur le disque."""
+        try:
+            reminder = reminders.Reminder(str(message["id"]), float(message["at"]), str(message["text"]))
+        except (KeyError, TypeError, ValueError):
+            log.warning("rappel illisible ignoré")
+            return
+        self._add_reminder(reminder)
+
+    def _add_reminder(self, reminder: reminders.Reminder) -> None:
+        self.reminders = sorted([*self.reminders, reminder], key=lambda r: r.at)
+        reminders.save(self.reminders)
+        log.info("rappel programmé (dans %.0f s)", reminder.at - time.time())
+        self._reminder_wake.set()
+
+    @_locked
+    def cancel_reminder(self, reminder_id: str) -> None:
+        kept = [r for r in self.reminders if r.id != reminder_id]
+        if len(kept) != len(self.reminders):
+            self.reminders = kept
+            reminders.save(self.reminders)
+            log.info("rappel annulé")
+
+    @_locked
+    def ring_due(self, now: float | None = None) -> None:
+        """Les rappels dont l'heure est venue : badge sur la mascotte (qui se réveille),
+        pastille dans la barre, et une notification, pour la voir même rangée."""
+        now = time.time() if now is None else now
+        due = [r for r in self.reminders if r.at <= now]
+        if not due:
+            return
+        self.reminders = [r for r in self.reminders if r.at > now]
+        reminders.save(self.reminders)
+        self.rang += due
+        log.info("%d rappel(s) sonné(s)", len(due))
+        for reminder in due:
+            late = now - reminder.at > LATE_REMINDER
+            title = f"Rappel, prévu à {datetime.fromtimestamp(reminder.at):%H:%M}" if late else "Rappel"
+            _in_thread(notify, f"Custos — {title}", reminder.text)()
+        self._show_badge()
+
+    def watch_reminders(self, stop: threading.Event) -> None:
+        """Thread des rappels : dort jusqu'au prochain, en regardant l'horloge régulièrement."""
+        while not stop.is_set():
+            self.ring_due()
+            with self._lock:
+                upcoming = self.reminders[0].at if self.reminders else None
+            delay = REMINDER_CHECK if upcoming is None else min(max(upcoming - time.time(), 0.1), REMINDER_CHECK)
+            self._reminder_wake.wait(delay)
+            self._reminder_wake.clear()
+
+    def _show_rang(self) -> None:
+        """Clic après la sonnerie : la carte montre le ou les rappels (sans appeler Claude)."""
+        rang, self.rang = self.rang, []
+        self._show_badge()
+        if len(rang) == 1:
+            question = f"Rappel de {datetime.fromtimestamp(rang[0].at):%H:%M}"
+            answer = rang[0].text
+        else:
+            question = f"{len(rang)} rappels"
+            answer = "\n".join(f"- **{datetime.fromtimestamp(r.at):%H:%M}** {r.text}" for r in rang)
+        self.card_open = True
+        self.ui.set_history([])
+        self.ui.reopen("", question, answer)
+
+    def _remind_from_card(self, typed: str, rest: str) -> None:
+        """`/rappel 20m sortir le linge` dans la carte, sans appeler Claude ; seul, il les liste."""
+        self.card_open = True
+        self.ui.set_history([])
+        if not rest:
+            pending = [f"- **{reminders.describe(r.at)}** {r.text}" for r in self.reminders]
+            self.ui.reopen("", typed, "\n".join(pending) or "Aucun rappel en attente.")
+            return
+        when, text = reminders.split(rest)
+        try:
+            reminder = reminders.create(when, text)
+        except reminders.WhenError as exc:
+            self.ui.show_error(str(exc))
+            return
+        self._add_reminder(reminder)
+        self.ui.reopen("", typed, f"C'est noté : je te le rappelle {reminders.describe(reminder.at)}.")
 
     # --- problèmes de la machine (voir system.py) ------------------------------------
 
@@ -712,6 +816,9 @@ class Daemon:
         model = None
         shown = ""  # ce que la carte affiche, quand ce n'est pas la question envoyée
         parsed = slash.parse(question.strip(), self.commands)
+        if parsed and parsed[0].action == slash.REMIND:
+            self._remind_from_card(question.strip(), parsed[1])
+            return None
         if parsed and parsed[0].action == slash.REPLAY:
             # `/r` : la dernière question, avec le même modèle (même si elle a échoué).
             if session.last_asked is None:
@@ -864,6 +971,14 @@ class Daemon:
             entries += [
                 (_short(p.title, 50), _in_thread(self.open_problem, p.key), ("alert", "#d9a33a"))
                 for p in problems
+            ]
+            entries.append(None)
+        with self._lock:
+            pending = list(self.reminders)
+        if pending:
+            entries += [None, ("Rappels", None)]
+            entries += [
+                (f"{reminders.describe(r.at)} · {_short(r.text, 40)}", None, ("bell", "#e8743b")) for r in pending
             ]
             entries.append(None)
         recent = history.search("", limit=MENU_HISTORY)
@@ -1045,6 +1160,7 @@ def run() -> int:
 
             daemon = Daemon(config, NotifyUI())
             handler.append(daemon.handle)
+            threading.Thread(target=daemon.watch_reminders, args=(stop_events,), daemon=True).start()
             _serve_headless(server)
         else:
             from custos.ui.overlay import OverlayUI
@@ -1060,6 +1176,7 @@ def run() -> int:
                 target=hyprland.listen, args=(daemon.on_hyprland_event, stop_events), daemon=True
             ).start()
             daemon.on_hyprland_event("fullscreen")  # déjà en plein écran au démarrage ?
+            threading.Thread(target=daemon.watch_reminders, args=(stop_events,), daemon=True).start()
             daemon.show_saved_quota()
             _serve_with_gtk(server, app)
     finally:
@@ -1079,8 +1196,6 @@ def _report_config_problems(config: Config) -> None:
         return
     for problem in config.problems:
         log.warning("config : %s", problem)
-    from custos.ui.notify import notify
-
     shown = "\n".join(config.problems[:5]) + ("\n…" if len(config.problems) > 5 else "")
     notify("Custos — config.toml", shown)
 
