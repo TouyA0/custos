@@ -27,7 +27,7 @@ def fake_desktop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(context.hyprland, "active_window", lambda: WINDOW)
     monkeypatch.setattr(context.clipboard, "selection", lambda: "export TOKEN=abcdef123456")
     monkeypatch.setattr(
-        context.screen, "capture", lambda w: captures.append(w.geometry) or Path("/tmp/x.png")
+        context.screen, "capture", lambda w, _config: captures.append(w.geometry) or Path("/tmp/x.png")
     )
     return captures
 

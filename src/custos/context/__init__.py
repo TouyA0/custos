@@ -65,7 +65,7 @@ def collect(
     if image:
         context.screenshot, context.image_kind = image, image_kind
     elif screenshot and window:
-        context.screenshot = screen.capture(window)
+        context.screenshot = screen.capture(window, config)
     return context
 
 

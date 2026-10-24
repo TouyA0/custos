@@ -142,6 +142,7 @@ class ActiveWindow:
     address: str = ""
     workspace: int = 0
     monitor: int = -1  # identifiant de l'écran où Hyprland la range
+    stable_id: str = ""  # identifiant pour capturer la fenêtre elle-même (`grim -T`)
 
     @property
     def geometry(self) -> str:
@@ -162,6 +163,7 @@ def parse(data: dict) -> ActiveWindow | None:
         address=data.get("address", ""),
         workspace=(data.get("workspace") or {}).get("id", 0),
         monitor=data.get("monitor", -1),
+        stable_id=str(data.get("stableId") or ""),
     )
 
 
