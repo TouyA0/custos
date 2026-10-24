@@ -97,5 +97,8 @@ class NotifyUI:
     def show_progress(self, question: str, status: str, answer: str, permission: str) -> None:
         pass
 
+    def set_alert(self, alert: str | None, text: str) -> None:
+        pass  # pas de barre sans overlay
+
     def reopen(self, summary: str, question: str, answer: str) -> None:
         self.end_answer(answer)

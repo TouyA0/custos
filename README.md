@@ -66,6 +66,10 @@ autre fenêtre pour changer, ou lâche-la ailleurs (ou `custos detach`) pour la 
 Une icône dans la barre (caelestia) permet de la ranger : clic pour la cacher ou la faire
 réapparaître, clic droit pour lui poser une question. Aussi via le clic droit sur la mascotte
 (« Se ranger dans la barre ») ou `custos toggle`. Elle reste rangée d'une session à l'autre.
+Quand quelque chose t'attend, l'icône le montre même si la mascotte est rangée, cachée par
+un plein écran ou sur l'autre écran : pastille orange quand Custos ou une session Claude
+Code attend ton accord, verte quand il a fini, avec le détail au survol. Le clic y mène
+alors (au lieu de ranger la mascotte).
 
 Avec plusieurs écrans, glisse-la d'un écran à l'autre : elle retient celui où tu l'as posée,
 y retourne quand tu le rebranches, et passe sur l'écran actif s'il est débranché. Accrochée,

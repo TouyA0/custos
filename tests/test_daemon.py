@@ -30,6 +30,7 @@ class FakeUI:
         self.resets = 0
         self.permissions: list[str | None] = []
         self.progress: list[tuple] = []
+        self.alerts: list[tuple] = []
 
     def set_state(self, state: MascotState) -> None:
         self.states.append(state)
@@ -84,6 +85,9 @@ class FakeUI:
 
     def show_progress(self, question: str, status: str, answer: str, permission: str) -> None:
         self.progress.append((question, status, answer, permission))
+
+    def set_alert(self, alert: str | None, text: str) -> None:
+        self.alerts.append((alert, text))
 
 
 @pytest.fixture(autouse=True)
@@ -1022,3 +1026,31 @@ def test_fast_command_uses_fast_model_for_this_question_only(monkeypatch, ui) ->
 def test_short_model() -> None:
     assert daemon.short_model("claude-sonnet-5-5") == "sonnet"
     assert daemon.short_model("claude-haiku-5-5") == "haiku"
+
+
+def test_tray_alert_follows_badges(monkeypatch, ui, agents) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(agent("Notification", notification="permission_prompt"))
+    assert ui.alerts[-1] == ("waiting", "Claude Code (projet) attend ta permission")
+    d.handle(agent("Stop"))
+    assert ui.alerts[-1] == ("done", "Claude Code (projet) a fini")
+    d.open_from_mascot()  # on y va : l'alerte s'éteint
+    assert ui.alerts[-1] == (None, "")
+
+
+def test_tray_alert_for_custos_waiting_with_card_closed(monkeypatch, ui) -> None:
+    monkeypatch.setattr(claude, "ask", agent_ask([("permission", "rm -rf ~/vieux")]))
+    use_context(monkeypatch, Context(window=WINDOW))
+    d = daemon.Daemon(Config(), ui)
+    worker = threading.Thread(target=d.handle, args=({"type": "ask", "question": "range"},))
+    worker.start()
+    for _ in range(200):
+        if d.work and d.work.permission:
+            break
+        threading.Event().wait(0.01)
+    assert ui.alerts[-1] == (None, "")  # carte ouverte : la demande s'y affiche
+    d.close_bubble()
+    assert ui.alerts[-1] == ("waiting", "Custos attend ton accord : rm -rf ~/vieux")
+    d.permission_answer(claude.DENY)
+    worker.join(2)
+    assert ui.alerts[-1] == ("done", "Custos a fini : range")

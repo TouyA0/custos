@@ -700,6 +700,14 @@ class OverlayUI:
             lambda overlay: overlay.bubble.show_progress(question, status, answer, permission)
         )
 
+    def set_alert(self, alert: str | None, text: str) -> None:
+        def update() -> bool:
+            if self.app.tray:
+                self.app.tray.set_alert(alert, text)
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(update)
+
 
 class MascotApp(Gtk.Application):
     def __init__(self, config: MascotConfig) -> None:

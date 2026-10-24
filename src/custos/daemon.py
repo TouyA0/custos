@@ -44,6 +44,7 @@ WAITING_NOTIFICATIONS = {"permission_prompt", "elicitation_dialog"}
 # Le travail de Custos lui-même, carte fermée : il attend ton accord, ou il a fini.
 CUSTOS_WAITING = "custos-waiting"
 ANSWER_READY = "answer-ready"
+ALERT_WAITING, ALERT_DONE = "waiting", "done"  # pastille de l'icône de la barre (voir tray)
 OUTPUT_TIMEOUT = 5.0  # secondes : au-delà, une sortie reçue n'est plus celle demandée
 
 
@@ -66,6 +67,7 @@ class UI(Protocol):
     def ask_permission(self, description: str) -> None: ...
     def permission_done(self) -> None: ...
     def show_progress(self, question: str, status: str, answer: str, permission: str) -> None: ...
+    def set_alert(self, alert: str | None, text: str) -> None: ...
 
 
 @dataclass
@@ -397,14 +399,26 @@ class Daemon:
             self._show_badge()
 
     def _show_badge(self) -> None:
-        """Badge de la mascotte : un agent qui attend passe avant tout le reste."""
-        work = self.work
+        """Badge de la mascotte, et alerte de l'icône de la barre (pour quand la mascotte
+        est rangée ou cachée) : un agent qui attend passe avant tout le reste."""
+        work, notice = self.work, self.notice
+        waiting = self._waiting_agent()
+        alert, text = None, ""
         if work and work.permission and not self.card_open:
-            self.ui.show_notice(CUSTOS_WAITING)
-        elif self._waiting_agent():
-            self.ui.show_notice(AGENT_WAITING)
+            kind = CUSTOS_WAITING
+            alert, text = ALERT_WAITING, f"Custos attend ton accord : {_short(work.permission.description)}"
+        elif waiting:
+            kind = AGENT_WAITING
+            alert, text = ALERT_WAITING, f"Claude Code ({waiting.project}) attend ta permission"
         else:
-            self.ui.show_notice(self.notice.kind if self.notice else None)
+            kind = notice.kind if notice else None
+            agent = self.agents.get(notice.path or "") if notice else None
+            if kind == AGENT_DONE and agent:
+                alert, text = ALERT_DONE, f"Claude Code ({agent.project}) a fini"
+            elif kind == ANSWER_READY and self.session:
+                alert, text = ALERT_DONE, f"Custos a fini : {_short(self.session.last_question)}"
+        self.ui.show_notice(kind)
+        self.ui.set_alert(alert, text)
 
     # --- sessions Claude Code ------------------------------------------------------
 
@@ -672,6 +686,11 @@ class Daemon:
         output = (message.get("output") or "").rstrip()
         self.last_failure["output"] = output
         log.info("sortie de la commande reçue (%d car.)", len(output))
+
+
+def _short(text: str, limit: int = 60) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def short_model(model: str) -> str:
