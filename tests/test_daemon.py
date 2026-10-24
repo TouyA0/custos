@@ -407,9 +407,18 @@ def test_nothing_noticed_while_bubble_is_open(monkeypatch, ui, collected, deskto
     d.handle({"type": "ask"})  # bulle ouverte
     d.on_watch_event(watch.SELECTION)
     assert ui.notices == []
-    d.close_session()
+    d.close_bubble()
     d.on_watch_event(watch.SELECTION)
     assert ui.notices == [watch.SELECTION]
+
+
+def test_noticed_again_after_a_conversation(ui, prompts, collected, desktop) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle({"type": "ask"})
+    d.answer("salut")
+    d.close_bubble()  # la session reste, pour la reprendre
+    d.on_watch_event(watch.SELECTION)
+    assert ui.notices[-1] == watch.SELECTION
 
 
 def test_old_notice_is_ignored(monkeypatch, ui, collected, desktop) -> None:

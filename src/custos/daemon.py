@@ -327,8 +327,10 @@ class Daemon:
 
     def on_watch_event(self, kind: str, path: str | None = None) -> None:
         """Changement de sélection, image copiée ou capture : allume le badge (sans appeler Claude)."""
-        if self.session or self._busy.locked():
-            return  # bulle ouverte : on ne dérange pas (et sa propre sélection ne compte pas)
+        # Carte ouverte : on ne dérange pas (et sa propre sélection ne compte pas). La
+        # session, elle, reste après la fermeture pour la reprendre : elle ne bloque rien.
+        if self.card_open or self._busy.locked():
+            return
         if kind != watch.SCREENSHOT:
             window = hyprland.active_window()
             if window and privacy.is_blocked(window.window_class, window.title, self.config.privacy):
