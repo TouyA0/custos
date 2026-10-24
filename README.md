@@ -81,6 +81,11 @@ les 10 minutes reprend la conversation ; ＋ en démarre une nouvelle. ↗ (ou `
 ouvre la conversation complète en grand : Claude Code dans un terminal, avec
 `claude --resume`. Un clic en dehors de la carte, Échap ou ✕ la ferment.
 
+Dans la carte, tape `/` pour les commandes : `/h` (ou `/historique`) liste tes dernières
+conversations, `/h caté` les filtre, ↑ ↓ et Entrée en rouvrent une, prête pour la suite ;
+`/n` en commence une nouvelle (comme ＋) et `/g` ouvre la conversation en grand (comme ↗).
+Une question qui commence par un chemin (`/etc/fstab c'est quoi ?`) reste une question.
+
 Quand il agit (« mon PC a crashé, trouve et règle le problème », « ouvre-moi le
 Catéchisme sur les anges »), la carte montre l'étape en cours (`▶ journalctl -b -1`), puis
 seulement sa conclusion ; le détail de ce qu'il a fait est dans la conversation en grand (↗).
@@ -144,6 +149,7 @@ src/custos/
 ├── daemon.py       boucle principale
 ├── ipc.py          socket Unix entre les commandes et le daemon
 ├── claude.py       appels à `claude -p`
+├── history.py      historique des conversations (fichiers de Claude Code)
 ├── config.py       lecture de ~/.config/custos/config.toml et custos.md
 ├── machine.py      détection de la machine (distribution, terminal, shell…)
 ├── states.py       états de la mascotte
@@ -154,6 +160,7 @@ src/custos/
     ├── bubble.py   bulle de dialogue : saisie, réponse en streaming, copie
     ├── position.py position de la mascotte (glisser-déposer) et placement de la bulle
     ├── tray.py     icône dans la barre (StatusNotifierItem, D-Bus)
+    ├── slash.py    commandes « / » de la carte (/h, /n, /g)
     ├── markdown.py Markdown des réponses → balisage Pango
     ├── animation.py  flottement, clignement, endormissement (sans GTK, testé)
     └── notify.py   notifications (réponses, et repli si l'overlay est impossible)

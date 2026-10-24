@@ -980,3 +980,19 @@ def test_cli_terminal_prefills_fish_command() -> None:
     argv = cli.terminal_command("sudo rm 'a b'", "foot claude")
     if argv[1] == "fish":
         assert argv == ["foot", "fish", "-C", "commandline -- 'sudo rm \\'a b\\''"]
+
+
+def test_open_history_reopens_conversation_for_follow_up(monkeypatch, ui, prompts) -> None:
+    from custos import history
+
+    found = history.Conversation("ancienne", 0.0, "le catéchisme", "et les anges ?", "CEC §328")
+    monkeypatch.setattr(daemon.history, "find", lambda session: found if session == "ancienne" else None)
+    monkeypatch.setattr(daemon.history, "search", lambda query: [found])
+    d = daemon.Daemon(Config(), ui)
+    assert d.history_items("caté")[0][0] == "ancienne"
+    d.open_history("ancienne")
+    assert ui.reopened[-1][1:] == ("et les anges ?", "CEC §328")
+    d.answer("et saint Michel ?")
+    assert prompts[-1][0] == "et saint Michel ?"  # suite de la session, sans contexte
+    d.open_history("disparue")
+    assert ui.errors == ["Je ne retrouve plus cette conversation."]

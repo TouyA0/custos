@@ -4,7 +4,8 @@ Une ligne pour demander, puis seulement la dernière réponse. ＋ démarre une 
 conversation, ↗ ouvre la conversation complète en grand (Claude Code dans un terminal).
 Un clic n'importe où en dehors de la carte la ferme ; un travail en cours continue alors
 en fond (■ l'arrête). Pendant qu'il agit, une ligne montre l'étape en cours, et une
-action sensible attend ici ton accord.
+action sensible attend ici ton accord. Taper « / » propose des commandes (voir slash.py) :
+`/h` liste les conversations passées, ↑ ↓ et Entrée en rouvrent une.
 
 La carte vit dans une surface layer-shell plein écran presque invisible : un clic sur
 cette surface, hors de la carte, la ferme. (Une surface séparée pour attraper ces clics
@@ -27,7 +28,7 @@ from gi.repository import Gdk, GLib, Graphene, Gtk, Pango
 from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.context import clipboard
-from custos.ui import markdown
+from custos.ui import markdown, slash
 from custos.ui.position import Placement
 
 WIDTH = 400
@@ -114,6 +115,11 @@ window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
     min-height: 24px;
 }}
 .card entry placeholder {{ color: rgba(26, 31, 43, 0.4); }}
+.card list.suggestions {{ background: transparent; }}
+.card list.suggestions row {{ border-radius: 8px; padding: 3px 6px; }}
+.card list.suggestions row:selected {{ background-color: rgba(26, 31, 43, 0.09); }}
+.card list.suggestions .when {{ color: rgba(26, 31, 43, 0.45); }}
+.card list.suggestions .empty {{ color: rgba(26, 31, 43, 0.45); }}
 """
 
 # Trois points dont un s'allume à tour de rôle, comme « en train d'écrire ».
@@ -139,7 +145,12 @@ class Bubble:
         on_new: Callable[[], None],
         on_stop: Callable[[], None] = lambda: None,
         on_permission: Callable[[str], None] = lambda choice: None,
+        on_history: Callable[[str], list[tuple[str, str, str]]] = lambda query: [],
+        on_open_history: Callable[[str], None] = lambda session: None,
     ) -> None:
+        self.on_history = on_history  # (session, quand, titre) des conversations trouvées
+        self.on_open_history = on_open_history
+        self._suggestions: list[tuple[str, str]] = []  # (action, valeur) de chaque ligne
         self.on_stop = on_stop
         self.on_permission = on_permission
         self.status = ""  # étape en cours, pendant qu'il agit
@@ -177,6 +188,8 @@ class Bubble:
         self.window.add_controller(click)
 
         keys = Gtk.EventControllerKey()
+        # Avant le champ de saisie : ↑ ↓ servent à choisir dans la liste des commandes.
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self._on_key)
         self.window.add_controller(keys)
 
@@ -223,9 +236,22 @@ class Bubble:
         self.entry = Gtk.Entry(placeholder_text="Demande à Custos…", hexpand=True)
         self.entry.set_margin_end(4)
         self.entry.connect("activate", self._on_activate)
+        self.entry.connect("changed", lambda _entry: self._update_suggestions())
+
+        self.suggestions = Gtk.ListBox(visible=False, selection_mode=Gtk.SelectionMode.BROWSE)
+        self.suggestions.add_css_class("suggestions")
+        self.suggestions.set_margin_end(4)
+        self.suggestions.connect("row-activated", lambda _list, row: self._pick(row.get_index()))
 
         for widget in (
-            header, self.scroll, self.permission_box, self.thinking_label, self.error, self.divider, self.entry
+            header,
+            self.scroll,
+            self.permission_box,
+            self.thinking_label,
+            self.error,
+            self.divider,
+            self.entry,
+            self.suggestions,
         ):
             card.append(widget)
         card.set_halign(Gtk.Align.START)
@@ -491,13 +517,16 @@ class Bubble:
             self.blocks.remove(child)
         for kind, content in markdown.blocks(self.answer.strip()):
             self.blocks.append(self._code_widget(content) if kind == "code" else self._text_widget(content))
-        self.scroll.set_visible(bool(self.answer.strip()))
+        if self.thinking and self.suggestions.get_visible():
+            self.suggestions.set_visible(False)  # le champ disparaît : sa liste aussi
+        listing = self.suggestions.get_visible()
+        self.scroll.set_visible(bool(self.answer.strip()) and not listing)
 
         self.thinking_label.set_text(self._thinking_text())
         self.thinking_label.set_visible(self.thinking and not self.answer and not self.permission)
         # Pendant la réponse, pas de champ : il revient (« Répondre… ») une fois qu'elle est finie.
         self.entry.set_visible(not self.thinking)
-        self.divider.set_visible(bool(self.answer) and not self.thinking)
+        self.divider.set_visible(bool(self.answer) and not self.thinking and not listing)
         if not self.thinking:
             self.entry.grab_focus()
         GLib.idle_add(self._fit_and_scroll, from_top)
@@ -523,7 +552,89 @@ class Bubble:
     def _on_activate(self, entry: Gtk.Entry) -> None:
         if self.thinking:
             return
+        if self.suggestions.get_visible():
+            row = self.suggestions.get_selected_row()
+            if row is not None:
+                self._pick(row.get_index())
+            return
+        parsed = slash.parse(entry.get_text())
+        if parsed and parsed[0].action != slash.HISTORY:
+            self._run(parsed[0].action)
+            return
         self.on_submit(entry.get_text())
+
+    # --- commandes « / » ----------------------------------------------------------
+
+    def _update_suggestions(self) -> None:
+        """Sous le champ : les commandes possibles, ou les conversations de `/h …`."""
+        text = self.entry.get_text()
+        rows: list[tuple[str, str, str]] = []  # (à gauche, texte, mention discrète)
+        self._suggestions = []
+        parsed = slash.parse(text)
+        if parsed and parsed[0].action == slash.HISTORY:
+            for session, when, title in self.on_history(parsed[1]):
+                rows.append((when, title, ""))
+                self._suggestions.append(("conversation", session))
+            if not rows:
+                rows.append(("", "Aucune conversation trouvée", "empty"))
+                self._suggestions.append(("none", ""))
+        else:
+            for command in slash.completions(text):
+                rows.append((f"/{command.alias}", f"/{command.name}  {command.description}", ""))
+                self._suggestions.append(("command", command.action))
+
+        while child := self.suggestions.get_first_child():
+            self.suggestions.remove(child)
+        for left, label, css in rows:
+            self.suggestions.append(self._suggestion_row(left, label, css))
+        self.suggestions.set_visible(bool(rows))
+        if rows:
+            self.suggestions.select_row(self.suggestions.get_row_at_index(0))
+        # La liste remplace la réponse affichée, le temps de choisir.
+        self.scroll.set_visible(not rows and bool(self.answer.strip()))
+        self.divider.set_visible(not rows and bool(self.answer) and not self.thinking)
+
+    def _suggestion_row(self, left: str, label: str, css: str) -> Gtk.Widget:
+        box = Gtk.Box(spacing=10)
+        if left:
+            when = Gtk.Label(label=left, xalign=0)
+            when.add_css_class("when")
+            box.append(when)
+        text = Gtk.Label(label=" ".join(label.split()), xalign=0, hexpand=True)
+        text.set_ellipsize(Pango.EllipsizeMode.END)
+        text.set_max_width_chars(1)
+        if css:
+            text.add_css_class(css)
+        box.append(text)
+        return box
+
+    def _pick(self, index: int) -> None:
+        if not 0 <= index < len(self._suggestions):
+            return
+        kind, value = self._suggestions[index]
+        if kind == "conversation":
+            self.entry.set_text("")
+            self.on_open_history(value)
+        elif kind == "command":
+            self._run(value)
+
+    def _run(self, action: str) -> None:
+        if action == slash.HISTORY:
+            self.entry.set_text("/h ")
+            self.entry.set_position(-1)
+            return
+        self.entry.set_text("")
+        if action == slash.NEW:
+            self.on_new()
+        elif action == slash.OPEN:
+            self.on_open_full()
+
+    def _move_selection(self, step: int) -> None:
+        row = self.suggestions.get_selected_row()
+        index = (row.get_index() if row else -1) + step
+        target = self.suggestions.get_row_at_index(max(0, min(index, len(self._suggestions) - 1)))
+        if target:
+            self.suggestions.select_row(target)
 
     def _on_copy(self, button: Gtk.Button, code: str) -> None:
         if clipboard.copy(code):
@@ -531,7 +642,14 @@ class Bubble:
             GLib.timeout_add(COPIED_FEEDBACK, lambda: button.set_label("⧉") or GLib.SOURCE_REMOVE)
 
     def _on_key(self, _controller, keyval: int, _keycode: int, _state: Gdk.ModifierType) -> bool:
+        listing = self.suggestions.get_visible()
         if keyval == Gdk.KEY_Escape:
-            self.close()
+            if listing:
+                self.entry.set_text("")  # Échap efface la commande ; une deuxième fois, ferme
+            else:
+                self.close()
+            return True
+        if listing and keyval in (Gdk.KEY_Up, Gdk.KEY_Down):
+            self._move_selection(-1 if keyval == Gdk.KEY_Up else 1)
             return True
         return False

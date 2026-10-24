@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from custos import claude, context, ipc, machine, watch
+from custos import claude, context, history, ipc, machine, watch
 from custos.config import Config, load, load_persona
 from custos.context import Context, clipboard, hyprland, privacy
 from custos.states import MascotState
@@ -244,6 +244,29 @@ class Daemon:
         session = self.session
         if session and not session.claude_session:
             self.close_session()  # rien à reprendre : on supprime aussi la capture
+
+    def history_items(self, query: str) -> list[tuple[str, str, str]]:
+        """`/h …` dans la carte : (session, quand, première question) des plus récentes."""
+        return [(c.session, history.when(c.updated), c.title) for c in history.search(query)]
+
+    def open_history(self, session_id: str) -> None:
+        """Conversation choisie dans `/h` : rouverte dans la carte, prête pour la suite."""
+        if self.work:
+            self._show_work()
+            return
+        found = history.find(session_id)
+        if found is None:
+            self.ui.show_error("Je ne retrouve plus cette conversation.")
+            return
+        self.close_session()
+        self.session = Session(
+            Context(),
+            claude_session=found.session,
+            summary=f"🕘 {history.when(found.updated)}",
+            last_question=found.last_question,
+            last_answer=found.last_answer,
+        )
+        self._reopen()
 
     def stop(self) -> None:
         """Bouton ■ : arrête la réponse ou la tâche en cours."""

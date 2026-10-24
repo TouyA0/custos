@@ -244,6 +244,8 @@ class MascotOverlay:
             on_new=lambda: app.on_new(),
             on_stop=lambda: app.on_stop(),
             on_permission=lambda choice: app.on_permission(choice),
+            on_history=lambda query: app.on_history(query),
+            on_open_history=lambda session: app.on_open_history(session),
         )
 
         self.canvas = round(config.size * (1 + 2 * PADDING))
@@ -625,6 +627,11 @@ class OverlayUI:
         self.app.on_monitor = daemon.set_monitor
         self.app.on_stop = daemon.stop
         self.app.on_permission = daemon.permission_answer
+        # Lu dans le thread GTK : la liste suit la frappe (fichiers en cache, rapide).
+        self.app.on_history = daemon.history_items
+        self.app.on_open_history = lambda session: threading.Thread(
+            target=daemon.open_history, args=(session,), daemon=True
+        ).start()
         self.app.on_open_full = daemon.open_full
         # Lire le contexte appelle hyprctl et wl-paste : hors du thread GTK.
         self.app.on_new = lambda: threading.Thread(target=daemon.new_conversation, daemon=True).start()
@@ -710,6 +717,8 @@ class MascotApp(Gtk.Application):
         self.on_monitor: Callable[[str], None] = lambda name: None
         self.on_stop: Callable[[], None] = lambda: None
         self.on_permission: Callable[[str], None] = lambda choice: None
+        self.on_history: Callable[[str], list[tuple[str, str, str]]] = lambda query: []
+        self.on_open_history: Callable[[str], None] = lambda session: None
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, app: Gtk.Application) -> None:
