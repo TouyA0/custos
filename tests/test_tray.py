@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from gi.repository import GLib
 from PIL import Image
 
 from custos.ui import tray
@@ -47,3 +48,47 @@ def test_icon_files_one_name_per_state(tmp_path: Path) -> None:
     radius = 64 * tray.DOT_RADIUS
     assert done.getpixel((int(64 - radius), int(radius))) == (*tray.DOT_COLORS[tray.DONE], 255)
     assert Image.open(folder / "custos-tray.png").convert("RGBA").getpixel((int(64 - radius), int(radius)))[3] == 0
+
+
+def test_menu_layout_and_actions() -> None:
+    clicked: list[str] = []
+    entries = [
+        ("Poser une question", lambda: clicked.append("question")),
+        ("Conversations récentes", [("09:10 · fstab", lambda: clicked.append("fstab"))]),
+        None,
+        ("Sessions Claude Code", None),
+        ("✋ mon_projet", lambda: clicked.append("projet")),
+    ]
+    menu = tray.Menu(lambda: entries)
+    assert menu.rebuild() and menu.revision == 1
+    number, props, children = GLib.Variant("(ia{sv}av)", menu.layout()).unpack()
+    assert number == 0 and props == {"children-display": "submenu"} and len(children) == 5
+    labels = [child[1].get("label") for child in children]
+    assert labels == ["Poser une question", "Conversations récentes", None, "Sessions Claude Code", "✋ mon__projet"]
+    assert children[2][1] == {"type": "separator"}
+    assert children[3][1]["enabled"] is False  # titre de section, grisé
+    submenu = children[1]
+    assert submenu[1]["children-display"] == "submenu" and submenu[2][0][1]["label"] == "09:10 · fstab"
+    assert menu.layout(depth=0)[2] == []  # sans les enfants
+    # La réponse à GetLayout, telle que la barre la reçoit.
+    reply = GLib.Variant("(u(ia{sv}av))", (menu.revision, menu.layout())).unpack()
+    assert reply[0] == 1 and len(reply[1][2]) == 5
+
+    assert menu.activate(submenu[2][0][0]) and menu.activate(children[4][0])
+    assert clicked == ["fstab", "projet"]
+    assert not menu.activate(children[3][0])  # pas d'action
+
+
+def test_menu_revision_changes_only_with_content() -> None:
+    entries = [("Ranger la mascotte", lambda: None)]
+    menu = tray.Menu(lambda: entries)
+    menu.rebuild()
+    assert not menu.rebuild() and menu.revision == 1
+    entries[0] = ("Faire réapparaître la mascotte", lambda: None)
+    assert menu.rebuild() and menu.revision == 2
+
+
+def test_broken_menu_keeps_previous() -> None:
+    menu = tray.Menu(lambda: 1 / 0)
+    assert not menu.rebuild()
+    assert menu.layout()[2] == []

@@ -1183,3 +1183,31 @@ def test_reopened_history_shows_its_exchanges(monkeypatch, ui) -> None:
     d.open_history("ancienne")
     assert ui.histories[-1] == [("le catéchisme", "CEC")]
     assert ui.reopened[-1][1:] == ("et les anges ?", "CEC §328")
+
+
+def test_tray_menu_lists_recent_conversations_and_agents(monkeypatch, ui, agents) -> None:
+    from custos import history
+
+    found = history.Conversation("ancienne", 0.0, "le catéchisme", "et les anges ?", "CEC §328")
+    monkeypatch.setattr(daemon.history, "search", lambda query, limit=8: [found])
+    opened: list[str] = []
+    monkeypatch.setattr(daemon.Daemon, "open_history", lambda self, session: opened.append(session))
+    d = daemon.Daemon(Config(), ui)
+    d.handle(agent("Notification", notification="permission_prompt"))
+    labels = [entry[0] if entry else None for entry in d.tray_menu()]
+    assert labels == ["Poser une question", "Conversations récentes", None, "Sessions Claude Code", "✋ projet"]
+
+    menu = d.tray_menu()
+    conversation = menu[1][1][0]
+    assert "le catéchisme" in conversation[0]
+    conversation[1]()  # dans un thread
+    time.sleep(0.1)
+    assert opened == ["ancienne"]
+    menu[4][1]()
+    time.sleep(0.1)
+    assert agents["focused"] == ["0xf00"]
+
+
+def test_tray_menu_without_history_or_agents(monkeypatch, ui) -> None:
+    monkeypatch.setattr(daemon.history, "search", lambda query, limit=8: [])
+    assert [entry[0] for entry in daemon.Daemon(Config(), ui).tray_menu()] == ["Poser une question"]

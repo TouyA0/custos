@@ -1,7 +1,9 @@
 """Icône dans la barre (protocole StatusNotifierItem, sur le bus D-Bus de session).
 
 Avec caelestia : clic gauche = `Activate` (ranger ou afficher la mascotte),
-clic droit = `SecondaryActivate` (ouvrir la bulle). Pas de menu D-Bus.
+clic droit = `SecondaryActivate` (ouvrir la bulle). Au survol, caelestia affiche le menu
+(protocole DBusMenu, voir Menu) : poser une question, conversations récentes, sessions
+Claude Code, ranger la mascotte, quitter.
 
 Quand quelque chose t'attend (Custos ou une session Claude Code veut ton accord, ou a
 fini), l'icône prend un point de couleur et son info-bulle dit pourquoi : utile quand la
@@ -16,7 +18,7 @@ Toutes les méthodes s'exécutent dans le thread GTK.
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import gi
@@ -29,6 +31,8 @@ log = logging.getLogger(__name__)
 
 WATCHER = "org.kde.StatusNotifierWatcher"
 ITEM_PATH = "/StatusNotifierItem"
+MENU_PATH = "/MenuBar"
+MENU_INTERFACE_NAME = "com.canonical.dbusmenu"
 ICON_SIZES = (22, 32, 48, 64)
 TOOLTIP = "Clic : ranger ou afficher la mascotte · clic droit : lui poser une question"
 WAITING, DONE = "waiting", "done"  # alertes : il attend ton accord, ou il a fini
@@ -51,6 +55,7 @@ INTERFACE = """
     <property name="AttentionIconPixmap" type="a(iiay)" access="read"/>
     <property name="ToolTip" type="(sa(iiay)ss)" access="read"/>
     <property name="ItemIsMenu" type="b" access="read"/>
+    <property name="Menu" type="o" access="read"/>
     <method name="Activate"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
     <method name="SecondaryActivate"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
     <method name="ContextMenu"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
@@ -62,6 +67,156 @@ INTERFACE = """
   </interface>
 </node>
 """
+
+
+MENU_INTERFACE = """
+<node>
+  <interface name="com.canonical.dbusmenu">
+    <property name="Version" type="u" access="read"/>
+    <property name="TextDirection" type="s" access="read"/>
+    <property name="Status" type="s" access="read"/>
+    <property name="IconThemePath" type="as" access="read"/>
+    <method name="GetLayout">
+      <arg type="i" name="parentId" direction="in"/>
+      <arg type="i" name="recursionDepth" direction="in"/>
+      <arg type="as" name="propertyNames" direction="in"/>
+      <arg type="u" name="revision" direction="out"/>
+      <arg type="(ia{sv}av)" name="layout" direction="out"/>
+    </method>
+    <method name="GetGroupProperties">
+      <arg type="ai" name="ids" direction="in"/>
+      <arg type="as" name="propertyNames" direction="in"/>
+      <arg type="a(ia{sv})" name="properties" direction="out"/>
+    </method>
+    <method name="GetProperty">
+      <arg type="i" name="id" direction="in"/>
+      <arg type="s" name="name" direction="in"/>
+      <arg type="v" name="value" direction="out"/>
+    </method>
+    <method name="Event">
+      <arg type="i" name="id" direction="in"/>
+      <arg type="s" name="eventId" direction="in"/>
+      <arg type="v" name="data" direction="in"/>
+      <arg type="u" name="timestamp" direction="in"/>
+    </method>
+    <method name="EventGroup">
+      <arg type="a(isvu)" name="events" direction="in"/>
+      <arg type="ai" name="idErrors" direction="out"/>
+    </method>
+    <method name="AboutToShow">
+      <arg type="i" name="id" direction="in"/>
+      <arg type="b" name="needUpdate" direction="out"/>
+    </method>
+    <method name="AboutToShowGroup">
+      <arg type="ai" name="ids" direction="in"/>
+      <arg type="ai" name="updatesNeeded" direction="out"/>
+      <arg type="ai" name="idErrors" direction="out"/>
+    </method>
+    <signal name="ItemsPropertiesUpdated">
+      <arg type="a(ia{sv})" name="updatedProps"/>
+      <arg type="a(ias)" name="removedProps"/>
+    </signal>
+    <signal name="LayoutUpdated">
+      <arg type="u" name="revision"/>
+      <arg type="i" name="parent"/>
+    </signal>
+    <signal name="ItemActivationRequested">
+      <arg type="i" name="id"/>
+      <arg type="u" name="timestamp"/>
+    </signal>
+  </interface>
+</node>
+"""
+
+# Entrées du menu : (texte, action) où l'action est une fonction, une liste d'entrées
+# (sous-menu) ou None (titre de section, grisé) ; None seul : un séparateur.
+MenuEntry = tuple[str, "Callable[[], None] | Sequence[MenuEntry | None] | None"] | None
+
+
+class Menu:
+    """Le menu de l'icône (DBusMenu), reconstruit à chaque ouverture à partir de `entries()`.
+
+    Chaque entrée a un numéro (0 : la racine) ; la révision augmente quand le menu change,
+    pour que la barre le redemande.
+    """
+
+    def __init__(self, entries: Callable[[], Sequence[MenuEntry]]) -> None:
+        self.entries = entries
+        self.revision = 0
+        self.items: dict[int, tuple[dict, list[int]]] = {0: ({"children-display": "submenu"}, [])}
+        self.actions: dict[int, Callable[[], None]] = {}
+        self._shape: list | None = None
+
+    def rebuild(self) -> bool:
+        """Relit les entrées ; True si le menu a changé (nouvelle révision)."""
+        try:
+            entries = list(self.entries())
+        except Exception:
+            log.exception("menu de l'icône impossible à construire")
+            return False
+        items: dict[int, tuple[dict, list[int]]] = {}
+        actions: dict[int, Callable[[], None]] = {}
+        shape: list = []
+
+        def add(level: Sequence[MenuEntry | None], parent: list[int]) -> None:
+            for entry in level:
+                number = len(items) + 1
+                if entry is None:
+                    items[number] = ({"type": "separator"}, [])
+                    shape.append(None)
+                else:
+                    label, action = entry
+                    # « _ » souligne la lettre suivante (raccourci) : on le double.
+                    props: dict = {"label": label.replace("_", "__")}
+                    children: list[int] = []
+                    items[number] = (props, children)
+                    shape.append(label)
+                    if callable(action):
+                        actions[number] = action
+                    elif action is None:
+                        props["enabled"] = False
+                    else:
+                        props["children-display"] = "submenu"
+                        shape.append("[")
+                        add(action, children)
+                        shape.append("]")
+                parent.append(number)
+
+        root: list[int] = []
+        add(entries, root)
+        items[0] = ({"children-display": "submenu"}, root)
+        self.items, self.actions = items, actions
+        if shape == self._shape:
+            return False
+        self._shape = shape
+        self.revision += 1
+        return True
+
+    def layout(self, number: int = 0, depth: int = -1) -> tuple:
+        """(id, propriétés, enfants) au format DBusMenu, `depth` niveaux (-1 : tous). Les
+        enfants sont des variants ; l'entrée elle-même, un tuple à placer dans la réponse."""
+        props, children = self.items.get(number, ({}, []))
+        kids = [
+            GLib.Variant("(ia{sv}av)", self.layout(child, depth - 1))
+            for child in ([] if depth == 0 else children)
+        ]
+        return number, _props(props), kids
+
+    def activate(self, number: int) -> bool:
+        action = self.actions.get(number)
+        if action is None:
+            return False
+        try:
+            action()
+        except Exception:
+            log.exception("action du menu en erreur")
+        return True
+
+
+def _props(props: dict) -> dict[str, GLib.Variant]:
+    return {
+        key: GLib.Variant("b" if isinstance(value, bool) else "s", value) for key, value in props.items()
+    }
 
 
 def add_dot(argb: bytearray, size: int, color: tuple[int, int, int]) -> None:
@@ -127,9 +282,16 @@ def argb_pixmaps(icon: Path, dot: str | None = None) -> list[tuple[int, int, byt
 
 
 class Tray:
-    def __init__(self, icon: Path, on_activate: Callable[[], None], on_secondary: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        icon: Path,
+        on_activate: Callable[[], None],
+        on_secondary: Callable[[], None],
+        menu: Callable[[], Sequence[MenuEntry]] = list,
+    ) -> None:
         self.on_activate = on_activate
         self.on_secondary = on_secondary
+        self.menu = Menu(menu)
         self.icons = {None: argb_pixmaps(icon)} | {kind: argb_pixmaps(icon, kind) for kind in DOT_COLORS}
         self.icon_dir = icon_dir()
         try:
@@ -149,6 +311,7 @@ class Tray:
         self.alert, self.alert_text = alert, text
         if self.bus is None:
             return
+        self.refresh_menu()  # une session Claude Code a changé d'état
         for signal, params in (
             ("NewIcon", None),
             ("NewAttentionIcon", None),
@@ -161,6 +324,18 @@ class Tray:
                 log.warning("impossible de mettre à jour l'icône : %s", exc.message)
                 return
 
+    def refresh_menu(self) -> None:
+        """Reconstruit le menu et prévient la barre s'il a changé."""
+        if self.bus is None or not self.menu.rebuild():
+            return
+        try:
+            self.bus.emit_signal(
+                None, MENU_PATH, MENU_INTERFACE_NAME, "LayoutUpdated",
+                GLib.Variant("(ui)", (self.menu.revision, 0)),
+            )
+        except GLib.Error as exc:
+            log.warning("impossible de mettre à jour le menu : %s", exc.message)
+
     def _status(self) -> str:
         return "NeedsAttention" if self.alert else "Active"
 
@@ -172,6 +347,9 @@ class Tray:
             return
         interface = Gio.DBusNodeInfo.new_for_xml(INTERFACE).interfaces[0]
         self.bus.register_object(ITEM_PATH, interface, self._on_call, self._on_get_property, None)
+        self.menu.rebuild()
+        menu = Gio.DBusNodeInfo.new_for_xml(MENU_INTERFACE).interfaces[0]
+        self.bus.register_object(MENU_PATH, menu, self._on_menu_call, self._on_menu_property, None)
         Gio.bus_own_name_on_connection(
             self.bus, self.name, Gio.BusNameOwnerFlags.NONE, None, None
         )
@@ -226,5 +404,74 @@ class Tray:
                 "(sa(iiay)ss)", ("", [], "Custos", self.alert_text or TOOLTIP)
             ),
             "ItemIsMenu": GLib.Variant("b", False),
+            "Menu": GLib.Variant("o", MENU_PATH),
         }
         return values.get(name)
+
+    # --- menu (DBusMenu) ---------------------------------------------------------
+
+    def _on_menu_call(self, _bus, _sender, _path, _interface, method: str, params, invocation) -> None:
+        try:
+            self._answer_menu_call(method, params, invocation)
+        except Exception as exc:
+            # Toujours une réponse : sinon la barre attend jusqu'à son délai.
+            log.exception("menu de l'icône : %s en erreur", method)
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.Failed", str(exc))
+
+    def _answer_menu_call(self, method: str, params, invocation) -> None:
+        menu = self.menu
+        args = params.unpack()
+        if method == "GetLayout":
+            parent, depth, _names = args
+            if parent == 0:
+                menu.rebuild()
+            result = GLib.Variant("(u(ia{sv}av))", (menu.revision, menu.layout(parent, depth)))
+        elif method == "GetGroupProperties":
+            ids, _names = args
+            wanted = ids or list(menu.items)
+            result = GLib.Variant(
+                "(a(ia{sv}))", ([(i, _props(menu.items[i][0])) for i in wanted if i in menu.items],)
+            )
+        elif method == "GetProperty":
+            number, name = args
+            value = menu.items.get(number, ({}, []))[0].get(name, "")
+            result = GLib.Variant("(v)", (_props({name: value})[name],))
+        elif method == "Event":
+            number, event, _data, _time = args
+            if event == "clicked":
+                self._activate_later(number)
+            result = None
+        elif method == "EventGroup":
+            errors = []
+            for number, event, _data, _time in args[0]:
+                if number not in menu.items:
+                    errors.append(number)
+                elif event == "clicked":
+                    self._activate_later(number)
+            result = GLib.Variant("(ai)", (errors,))
+        elif method == "AboutToShow":
+            result = GLib.Variant("(b)", (menu.rebuild() if args[0] == 0 else False,))
+        elif method == "AboutToShowGroup":
+            changed = menu.rebuild() if 0 in args[0] else False
+            result = GLib.Variant("(aiai)", ([0] if changed else [], []))
+        else:
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)
+            return
+        invocation.return_value(result)
+
+    def _activate_later(self, number: int) -> None:
+        """Après avoir répondu à la barre : l'action peut ouvrir la carte, changer de fenêtre…"""
+
+        def run() -> bool:
+            self.menu.activate(number)
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(run)
+
+    def _on_menu_property(self, _bus, _sender, _path, _interface, name: str) -> GLib.Variant | None:
+        return {
+            "Version": GLib.Variant("u", 3),
+            "TextDirection": GLib.Variant("s", "ltr"),
+            "Status": GLib.Variant("s", "normal"),
+            "IconThemePath": GLib.Variant("as", []),
+        }.get(name)

@@ -394,6 +394,10 @@ class MascotOverlay:
         hidden = self._hidden_fullscreen or self._hidden_offscreen or self._stowed
         self.window.set_visible(not hidden)
 
+    @property
+    def stowed(self) -> bool:
+        return self._stowed
+
     def toggle_stowed(self) -> None:
         """Range la mascotte dans la barre, ou l'en fait ressortir."""
         self._stowed = not self._stowed
@@ -653,6 +657,7 @@ class OverlayUI:
         ).start()
         self.app.on_open_full = daemon.open_full
         self.app.on_run = daemon.run_in_terminal
+        self.app.on_menu = daemon.tray_menu
         # Lire le contexte appelle hyprctl et wl-paste : hors du thread GTK.
         self.app.on_new = lambda: threading.Thread(target=daemon.new_conversation, daemon=True).start()
 
@@ -752,7 +757,24 @@ class MascotApp(Gtk.Application):
         self.on_history: Callable[[str], list[tuple[str, str, str]]] = lambda query: []
         self.on_open_history: Callable[[str], None] = lambda session: None
         self.on_run: Callable[[str], None] = lambda command: None
+        self.on_menu: Callable[[], list] = list  # entrées du daemon pour le menu de l'icône
         self.connect("activate", self._on_activate)
+
+    def _menu(self) -> list:
+        """Menu de l'icône : celui du daemon, puis ranger la mascotte et quitter."""
+        stowed = self.overlay is not None and self.overlay.stowed
+        return [
+            *self.on_menu(),
+            None,
+            ("Faire réapparaître la mascotte" if stowed else "Ranger la mascotte", self._toggle_stowed),
+            ("Quitter Custos", self.quit),
+        ]
+
+    def _toggle_stowed(self) -> None:
+        if self.overlay:
+            self.overlay.toggle_stowed()
+            if self.tray:
+                self.tray.refresh_menu()
 
     def _on_activate(self, app: Gtk.Application) -> None:
         if self.overlay is None:
@@ -760,8 +782,9 @@ class MascotApp(Gtk.Application):
             if self.config.tray:
                 self.tray = Tray(
                     DEFAULT_ICON,
-                    on_activate=self.overlay.toggle_stowed,
+                    on_activate=self._toggle_stowed,
                     on_secondary=lambda: self.on_open(),
+                    menu=self._menu,
                 )
                 self.tray.start()
         self.overlay.show()

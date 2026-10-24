@@ -48,6 +48,8 @@ CUSTOS_WAITING = "custos-waiting"
 ANSWER_READY = "answer-ready"
 ALERT_WAITING, ALERT_DONE = "waiting", "done"  # pastille de l'icône de la barre (voir tray)
 OUTPUT_TIMEOUT = 5.0  # secondes : au-delà, une sortie reçue n'est plus celle demandée
+MENU_HISTORY = 6  # conversations récentes dans le menu de l'icône
+AGENT_ICONS = {"working": "⏳", "waiting": "✋", "done": "✅"}  # sessions Claude Code, dans le menu
 
 
 class UI(Protocol):
@@ -722,6 +724,38 @@ class Daemon:
             return
         log.info("conversation ouverte en grand")
 
+    def tray_menu(self) -> list:
+        """Menu de l'icône de la barre (voir tray.Menu) : poser une question, conversations
+        récentes, sessions Claude Code. Les actions partent dans un thread : elles lisent le
+        contexte ou des fichiers, et le menu est appelé depuis le thread GTK."""
+        entries: list = [("Poser une question", _in_thread(self.ask, {"type": "ask"}))]
+        recent = history.search("", limit=MENU_HISTORY)
+        if recent:
+            entries.append((
+                "Conversations récentes",
+                [
+                    (f"{history.when(c.updated)} · {_short(c.title, 40)}", _in_thread(self.open_history, c.session))
+                    for c in recent
+                ],
+            ))
+        with self._lock:
+            self._waiting_agent()  # oublie les sessions dont Claude Code a disparu
+            agents = sorted(self.agents.values(), key=lambda a: a.at, reverse=True)
+        if agents:
+            entries += [None, ("Sessions Claude Code", None)]
+            entries += [
+                (f"{AGENT_ICONS.get(a.state, '•')} {a.project}", _in_thread(self.go_to_agent, a.session))
+                for a in agents
+            ]
+        return entries
+
+    @_locked
+    def go_to_agent(self, session: str) -> None:
+        """Menu de l'icône : la fenêtre de cette session Claude Code."""
+        agent = self.agents.get(session)
+        if agent:
+            self._go_to_agent(agent)
+
     def run_in_terminal(self, command: str) -> None:
         """Clic sur une commande de la réponse : un terminal s'ouvre avec elle, prête à lancer."""
         try:
@@ -782,6 +816,11 @@ def short_model(model: str) -> str:
     """« claude-sonnet-5-5 » → « sonnet » : affiché à côté de la question."""
     parts = model.removeprefix("claude-").split("-")
     return parts[0] if parts else model
+
+
+def _in_thread(action, *args) -> Callable[[], None]:
+    """Action du menu, lancée hors du thread GTK."""
+    return lambda: threading.Thread(target=action, args=args, daemon=True).start()
 
 
 def _later(delay: float, action, *args) -> None:

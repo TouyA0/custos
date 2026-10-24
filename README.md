@@ -66,7 +66,9 @@ même si une autre a le focus. Glisse-la le long du bord pour la déplacer, sur 
 autre fenêtre pour changer, ou lâche-la ailleurs (ou `custos detach`) pour la détacher. Elle se détache aussi quand la fenêtre se ferme.
 
 Une icône dans la barre (caelestia) permet de la ranger : clic pour la cacher ou la faire
-réapparaître, clic droit pour lui poser une question. Aussi via le clic droit sur la mascotte
+réapparaître, clic droit pour lui poser une question. Au survol, son menu propose aussi
+tes conversations récentes, tes sessions Claude Code en cours (un clic pour y aller) et
+de quitter Custos. Aussi via le clic droit sur la mascotte
 (« Se ranger dans la barre ») ou `custos toggle`. Elle reste rangée d'une session à l'autre.
 Quand quelque chose t'attend, l'icône le montre même si la mascotte est rangée, cachée par
 un plein écran ou sur l'autre écran : pastille orange quand Custos ou une session Claude
