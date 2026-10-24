@@ -20,6 +20,7 @@ from pathlib import Path
 log = logging.getLogger("custos.supervisor")
 
 LAYER_SHELL_LIB = Path("/usr/lib/libgtk4-layer-shell.so")
+GSK_RENDERER = "gl"  # moteur de rendu GTK : OpenGL
 MAX_LOG_SIZE = 1024 * 1024  # au-delà, l'ancien log devient custos.log.1 au démarrage
 CRASH_WINDOW = 60.0  # secondes
 MAX_CRASHES = 5  # plantages tolérés dans CRASH_WINDOW avant d'abandonner
@@ -67,6 +68,9 @@ def worker_env() -> dict[str, str]:
     preload = env.get("LD_PRELOAD", "")
     if LAYER_SHELL_LIB.exists() and "libgtk4-layer-shell" not in preload:
         env["LD_PRELOAD"] = f"{LAYER_SHELL_LIB} {preload}".strip()
+    # Rendu OpenGL plutôt que Vulkan (défaut de GTK 4.24) : la mascotte redessine en
+    # continu, et Vulkan (Mesa ANV, i915) figeait tout le PC. GSK_RENDERER=vulkan pour revenir.
+    env.setdefault("GSK_RENDERER", GSK_RENDERER)
     return env
 
 

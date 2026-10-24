@@ -120,6 +120,13 @@ def test_worker_env_preloads_layer_shell(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert supervisor.worker_env()["LD_PRELOAD"] == str(lib)
 
 
+def test_worker_env_uses_opengl_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GSK_RENDERER", raising=False)
+    assert supervisor.worker_env()["GSK_RENDERER"] == "gl"
+    monkeypatch.setenv("GSK_RENDERER", "vulkan")  # choix explicite : respecté
+    assert supervisor.worker_env()["GSK_RENDERER"] == "vulkan"
+
+
 def test_status_when_stopped(capsys) -> None:
     assert supervisor.status() == 1
     assert "ne tourne pas" in capsys.readouterr().out
