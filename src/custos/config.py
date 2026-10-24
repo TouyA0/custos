@@ -6,6 +6,8 @@ import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from custos.ui.slash import RESERVED
+
 
 def config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
@@ -100,6 +102,15 @@ class NoticeConfig:
 
 
 @dataclass
+class CommandConfig:
+    """Une commande « / » à toi : `traduis = "Traduis en français."`, ou une table
+    `{ prompt = "…", fast = true }` pour la poser avec le modèle rapide."""
+
+    prompt: str
+    fast: bool = False
+
+
+@dataclass
 class Config:
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     mascot: MascotConfig = field(default_factory=MascotConfig)
@@ -108,6 +119,7 @@ class Config:
     notice: NoticeConfig = field(default_factory=NoticeConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
+    commands: dict[str, CommandConfig] = field(default_factory=dict)  # par nom, sans le « / »
     # Ce qui a été ignoré à la lecture (faute de frappe, mauvais type…) : signalé au démarrage.
     problems: list[str] = field(default_factory=list)
 
@@ -138,6 +150,38 @@ def _section(name: str, cls: type, data, problems: list[str]):
     return section
 
 
+def _commands(data, problems: list[str]) -> dict[str, CommandConfig]:
+    """Section [commands] : nom → consigne. Un nom pris par une commande de Custos, ou
+    qu'on ne pourrait pas taper après « / », est ignoré (et noté)."""
+    commands: dict[str, CommandConfig] = {}
+    if not isinstance(data, dict):
+        problems.append("[commands] n'est pas une section : ignorée")
+        return commands
+    for name, value in data.items():
+        if not re.fullmatch(r"[\w-]+", name):
+            problems.append(f"[commands] {name} : un seul mot sans espace ni « / », ignorée")
+            continue
+        if name in RESERVED:
+            problems.append(f"[commands] {name} : déjà une commande de Custos, ignorée")
+            continue
+        if isinstance(value, str):
+            value = {"prompt": value}
+        if not isinstance(value, dict):
+            problems.append(f"[commands] {name} : une consigne entre guillemets attendue, ignorée")
+            continue
+        for key in value.keys() - {"prompt", "fast"}:
+            problems.append(f"[commands] {name}.{key} : option inconnue, ignorée")
+        prompt, fast = value.get("prompt"), value.get("fast", False)
+        if not isinstance(prompt, str) or not prompt.strip():
+            problems.append(f"[commands] {name} : consigne vide ou absente, ignorée")
+            continue
+        if not isinstance(fast, bool):
+            problems.append(f"[commands] {name}.fast : true ou false attendu, défaut gardé (False)")
+            fast = False
+        commands[name] = CommandConfig(prompt.strip(), fast)
+    return commands
+
+
 def load(path: Path | None = None) -> Config:
     """Lit le fichier de config ; les valeurs absentes gardent leur défaut.
 
@@ -155,10 +199,12 @@ def load(path: Path | None = None) -> Config:
         return Config(problems=[f"{path.name} illisible ({exc}) : réglages par défaut"])
 
     problems: list[str] = []
-    sections = {f.name: f.default_factory for f in fields(Config) if f.name != "problems"}
-    for name in sorted(data.keys() - sections.keys()):
+    special = ("commands", "problems")
+    sections = {f.name: f.default_factory for f in fields(Config) if f.name not in special}
+    for name in sorted(data.keys() - sections.keys() - {"commands"}):
         problems.append(f"[{name}] : section inconnue, ignorée")
     return Config(
         **{name: _section(name, cls, data.get(name, {}), problems) for name, cls in sections.items()},
+        commands=_commands(data.get("commands", {}), problems),
         problems=problems,
     )

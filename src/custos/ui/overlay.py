@@ -28,7 +28,7 @@ from gi.repository import Gtk4LayerShell as LayerShell
 from custos.config import MascotConfig
 from custos.context import hyprland
 from custos.states import MascotState
-from custos.ui import icons, position, theme
+from custos.ui import icons, position, slash, theme
 from custos.ui.animation import ALL_SPRITES, Animator, snap
 from custos.ui.bubble import WIDTH as BUBBLE_WIDTH
 from custos.ui.bubble import Bubble, image_drop_target
@@ -272,6 +272,7 @@ class MascotOverlay:
             on_paste_image=lambda: app.on_paste_image(),
             on_image=lambda path, temporary: app.on_image(path, temporary),
             on_remove_attachments=lambda: app.on_remove_attachments(),
+            commands=lambda: app.commands,
         )
 
         self.canvas = round(config.size * (1 + 2 * PADDING))
@@ -685,6 +686,7 @@ class OverlayUI:
         self.app.on_open_full = daemon.open_full
         self.app.on_run = daemon.run_in_terminal
         self.app.on_menu = daemon.tray_menu
+        self.app.commands = daemon.commands  # tes commandes « / », proposées dans la carte
         # Lire et convertir une image prend un instant : hors du thread GTK.
         self.app.on_paste_image = lambda: threading.Thread(target=daemon.paste_image, daemon=True).start()
         self.app.on_image = lambda path, temporary: threading.Thread(
@@ -805,6 +807,7 @@ class MascotApp(Gtk.Application):
         self.on_paste_image: Callable[[], None] = lambda: None
         self.on_image: Callable[[Path, bool], None] = lambda path, temporary: None
         self.on_remove_attachments: Callable[[], None] = lambda: None
+        self.commands: list[slash.Command] = []  # celles de [commands] dans la config
         self.connect("activate", self._on_activate)
 
     def _menu(self) -> list:

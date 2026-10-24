@@ -100,6 +100,14 @@ dans la config) ; `/r` repose la dernière question (même ratée, avec le même
 ouvre la conversation en grand.
 Une question qui commence par un chemin (`/etc/fstab c'est quoi ?`) reste une question.
 
+Tes propres commandes s'écrivent dans la section `[commands]` de la config :
+`traduis = "Traduis en français."`, ou `{ prompt = "…", fast = true }` pour la poser avec
+Sonnet comme `/vite`. `/traduis` seul envoie la consigne avec la sélection ou la capture,
+comme toute question ; `/traduis good morning` y ajoute ce texte ; en pleine conversation,
+elle s'applique à la dernière réponse. Choisie dans la liste, elle part tout de suite. Elle
+marche aussi au clavier, sans ouvrir la carte : `custos ask --selection /traduis`, à lier à
+un raccourci Hyprland. Après une modification, `custos restart`.
+
 Quand il agit (« mon PC a crashé, trouve et règle le problème », « ouvre-moi le
 Catéchisme sur les anges »), la carte montre l'étape en cours (`▶ journalctl -b -1`), puis
 seulement sa conclusion ; le détail de ce qu'il a fait est dans la conversation en grand (bouton « ouvrir »).
@@ -202,7 +210,7 @@ src/custos/
     ├── bubble.py   bulle de dialogue : saisie, réponse en streaming, copie
     ├── position.py position de la mascotte (glisser-déposer) et placement de la bulle
     ├── tray.py     icône dans la barre (StatusNotifierItem, D-Bus)
-    ├── slash.py    commandes « / » de la carte (/h, /n, /g)
+    ├── slash.py    commandes « / » de la carte (/h, /n, /g… et les tiennes)
     ├── markdown.py Markdown des réponses → balisage Pango
     ├── animation.py  flottement, clignement, endormissement (sans GTK, testé)
     └── notify.py   notifications (réponses, et repli si l'overlay est impossible)

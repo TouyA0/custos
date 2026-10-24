@@ -139,7 +139,8 @@ class Session:
     summary: str = ""  # ce que Custos a lu, affiché en haut de la carte
     last_question: str = ""
     last_answer: str = ""
-    last_asked: tuple[str, str | None] | None = None  # (question, modèle) pour `/r`, même ratée
+    # (question, modèle, ce qu'affiche la carte) pour `/r`, même ratée
+    last_asked: tuple[str, str | None, str] | None = None
     # Questions et réponses déjà finies, dans l'ordre : la carte montre les précédentes au-dessus.
     exchanges: list[tuple[str, str]] = field(default_factory=list)
     always: set[tuple[str, str]] = field(default_factory=set)  # actions autorisées « toujours »
@@ -165,6 +166,8 @@ class Daemon:
     def __init__(self, config: Config, ui: UI) -> None:
         self.config = config
         self.ui = ui
+        # Tes commandes « / » ([commands] de la config), en plus de celles de Custos.
+        self.commands = [slash.custom(name, c.prompt, c.fast) for name, c in config.commands.items()]
         self.session: Session | None = None
         self.last_failure: dict | None = None  # dernière commande shell en échec
         self._failure_at = 0.0
@@ -707,19 +710,25 @@ class Daemon:
         ctx = session.context
         # `/vite …` : cette question seulement, avec le modèle rapide (fast_model).
         model = None
-        parsed = slash.parse(question.strip())
+        shown = ""  # ce que la carte affiche, quand ce n'est pas la question envoyée
+        parsed = slash.parse(question.strip(), self.commands)
         if parsed and parsed[0].action == slash.REPLAY:
             # `/r` : la dernière question, avec le même modèle (même si elle a échoué).
             if session.last_asked is None:
                 self.ui.show_error("Pas encore de question à reposer.")
                 return None
-            question, model = session.last_asked
+            question, model, shown = session.last_asked
             parsed = None
         if parsed and parsed[0].action == slash.FAST:
             model, question = self.config.claude.fast_model, parsed[1]
             if not question and not context.default_question(ctx):
                 self.ui.show_error("Écris ta question après /vite.")
                 return None
+        if parsed and parsed[0].action == slash.CUSTOM:
+            # Une des tiennes : sa consigne est envoyée, la carte garde « /traduis … ».
+            command, rest = parsed
+            shown, question = question.strip(), slash.expand(command, rest)
+            model = self.config.claude.fast_model if command.fast else None
         question = question.strip() or context.default_question(ctx) or ""
         if not question:
             self.ui.show_error("Écris ta question.")
@@ -728,8 +737,9 @@ class Daemon:
             self.ui.show_error("Je réfléchis déjà à ta question précédente.")
             return None
         self._cancel.clear()
-        session.last_asked = (question, model)
-        work = self.work = Work(question)
+        session.last_asked = (question, model, shown)
+        shown = shown or question
+        work = self.work = Work(shown)
         agent = self.config.claude.tools and getattr(self.ui, "interactive", True)
         # Première question : avec le contexte (fenêtre, sélection, capture). Les suivantes
         # reprennent la session Claude, qui a déjà tout ça : juste la question.
@@ -750,7 +760,7 @@ class Daemon:
         self.card_open = True
         self.ui.set_history(session.exchanges)
         self.ui.set_attachments(0)  # envoyées avec cette question
-        self.ui.start_answer(f"{question} · {short_model(model)}" if model else question)
+        self.ui.start_answer(f"{shown} · {short_model(model)}" if model else shown)
         return session, work, prompt, images, agent, model
 
     def _end_work(self, session: Session, work: Work, begin: float) -> None:

@@ -34,3 +34,25 @@ def test_replay_and_copy_commands() -> None:
     assert slash.parse("/c")[0].action == slash.COPY
     assert slash.parse("/copie")[0].action == slash.COPY
     assert [c.name for c in slash.completions("/c")] == ["copie"]
+
+
+def test_custom_commands() -> None:
+    traduis = slash.custom("traduis", "Traduis en français.")
+    résume = slash.custom("résume", "Résume en trois points.", fast=True)
+    custom = [traduis, résume]
+    command, rest = slash.parse("/traduis good morning", custom)
+    assert command is traduis and rest == "good morning"
+    assert slash.parse("/résume", custom)[0].fast is True
+    assert slash.parse("/traduis") is None  # sans la config : une question ordinaire
+    assert [c.name for c in slash.completions("/r", custom)] == ["rejouer", "résume"]
+    assert slash.completions("/", custom)[-2:] == custom
+
+
+def test_expand_appends_what_is_typed() -> None:
+    traduis = slash.custom("traduis", "Traduis en français.")
+    assert slash.expand(traduis, "") == "Traduis en français."
+    assert slash.expand(traduis, "good morning") == "Traduis en français.\n\ngood morning"
+
+
+def test_a_lone_slash_is_not_a_command() -> None:
+    assert slash.parse("/", [slash.custom("traduis", "Traduis.")]) is None

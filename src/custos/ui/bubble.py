@@ -5,7 +5,8 @@ une nouvelle conversation, « ouvrir » la montre en grand (Claude Code dans un 
 Un clic n'importe où en dehors de la carte la ferme ; un travail en cours continue alors
 en fond (« arrêter » l'arrête). Pendant qu'il agit, une ligne montre l'étape en cours, et une
 action sensible attend ici ton accord. Taper « / » propose des commandes (voir slash.py) :
-`/h` liste les conversations passées, ↑ ↓ et Entrée en rouvrent une.
+`/h` liste les conversations passées, ↑ ↓ et Entrée en rouvrent une ; les tiennes ([commands]
+de la config) partent dès qu'on les choisit.
 
 La carte vit dans une surface layer-shell plein écran presque invisible : un clic sur
 cette surface, hors de la carte, la ferme. (Une surface séparée pour attraper ces clics
@@ -16,7 +17,7 @@ Toutes les méthodes s'exécutent dans le thread GTK.
 
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import gi
@@ -192,7 +193,9 @@ class Bubble:
         on_paste_image: Callable[[], None] = lambda: None,
         on_image: Callable[[Path, bool], None] = lambda path, temporary: None,
         on_remove_attachments: Callable[[], None] = lambda: None,
+        commands: Callable[[], Sequence[slash.Command]] = tuple,
     ) -> None:
+        self.commands = commands  # tes commandes « / » (config), en plus de celles de Custos
         self.on_run = on_run  # ouvre une commande de la réponse dans un terminal
         self.on_paste_image = on_paste_image  # Ctrl+V avec une image dans le presse-papier
         self.on_remove_attachments = on_remove_attachments
@@ -801,7 +804,7 @@ class Bubble:
             if row is not None:
                 self._pick(row.get_index())
             return
-        parsed = slash.parse(entry.get_text())
+        parsed = slash.parse(entry.get_text(), self.commands())
         if parsed and parsed[0].action in (slash.NEW, slash.OPEN, slash.COPY):
             self._run(parsed[0].action)
             return
@@ -814,7 +817,7 @@ class Bubble:
         text = self.entry.get_text()
         rows: list[tuple[str, str, str]] = []  # (à gauche, texte, mention discrète)
         self._suggestions = []
-        parsed = slash.parse(text)
+        parsed = slash.parse(text, self.commands())
         if parsed and parsed[0].action == slash.HISTORY:
             for session, when, title in self.on_history(parsed[1]):
                 rows.append((when, title, ""))
@@ -823,9 +826,14 @@ class Bubble:
                 rows.append(("", "Aucune conversation trouvée", "empty"))
                 self._suggestions.append(("none", ""))
         else:
-            for command in slash.completions(text):
-                rows.append((f"/{command.alias}", f"/{command.name}  {command.description}", ""))
-                self._suggestions.append(("command", command.action))
+            for command in slash.completions(text, self.commands()):
+                if command.action == slash.CUSTOM:
+                    # La tienne : son nom, puis sa consigne.
+                    rows.append((f"/{command.name}", command.description, ""))
+                    self._suggestions.append(("custom", command.name))
+                else:
+                    rows.append((f"/{command.alias}", f"/{command.name}  {command.description}", ""))
+                    self._suggestions.append(("command", command.action))
 
         while child := self.suggestions.get_first_child():
             self.suggestions.remove(child)
@@ -861,6 +869,11 @@ class Bubble:
             self.on_open_history(value)
         elif kind == "command":
             self._run(value)
+        elif kind == "custom":
+            # Comme `/r` : choisie, elle part (sur la sélection, la capture ou la conversation).
+            # Pour y ajouter un texte, il suffit de taper une espace après son nom.
+            self.entry.set_text("")
+            self.on_submit(f"/{value}")
 
     def _run(self, action: str) -> None:
         if action in (slash.HISTORY, slash.FAST):

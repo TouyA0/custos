@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from custos import claude, cli, context, daemon, system, watch
-from custos.config import Config
+from custos.config import CommandConfig, Config
 from custos.context import Context
 from custos.context.hyprland import ActiveWindow
 from custos.states import MascotState
@@ -1049,6 +1049,39 @@ def test_fast_command_uses_fast_model_for_this_question_only(monkeypatch, ui) ->
     assert ui.questions == ["c'est quoi ls -la ? · sonnet", "et ls -lh ?"]
     d.answer("/vite")
     assert ui.errors == ["Écris ta question après /vite."]
+
+
+def test_custom_command_sends_its_prompt(monkeypatch, ui) -> None:
+    models: list = []
+
+    def ask(prompt, config, *, model=None, on_session=None, **_kwargs):
+        models.append((prompt, model))
+        on_session("session-1")
+        yield "ok"
+
+    monkeypatch.setattr(claude, "ask", ask)
+    use_context(monkeypatch, Context(window=WINDOW, selection="good morning"))
+    cfg = Config(
+        commands={
+            "traduis": CommandConfig("Traduis en français."),
+            "résume": CommandConfig("Résume en trois points.", fast=True),
+        }
+    )
+    d = daemon.Daemon(cfg, ui)
+    d.handle({"type": "ask", "selection": True})
+    d.answer("/traduis")
+    assert "good morning" in models[0][0] and models[0][0].endswith("Question : Traduis en français.")
+    assert models[0][1] is None
+    d.answer("/résume plutôt en une phrase")
+    assert models[1] == ("Résume en trois points.\n\nplutôt en une phrase", "claude-sonnet-5-5")
+    d.answer("/r")
+    assert models[2] == models[1]
+    assert ui.questions == [
+        "/traduis",
+        "/résume plutôt en une phrase · sonnet",
+        "/résume plutôt en une phrase · sonnet",
+    ]
+    assert d.session.exchanges[0][0] == "/traduis"
 
 
 def test_short_model() -> None:

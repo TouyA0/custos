@@ -65,3 +65,32 @@ def test_broken_toml_gives_defaults(tmp_path: Path) -> None:
 def test_valid_file_has_no_problems() -> None:
     example = Path(__file__).parent.parent / "config" / "config.example.toml"
     assert config.load(example).problems == []
+
+
+def test_custom_commands(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[commands]\n'
+        'traduis = "Traduis en français."\n'
+        '"résume" = { prompt = "  Résume.  ", fast = true }\n'
+        'h = "Pris par /h"\n'
+        '"deux mots" = "Ignorée"\n'
+        'vide = ""\n'
+        'nombre = 3\n'
+        'lente = { prompt = "Lente.", fast = "oui", couleur = "bleu" }\n'
+    )
+    cfg = config.load(path)
+    assert cfg.commands == {
+        "traduis": config.CommandConfig("Traduis en français."),
+        "résume": config.CommandConfig("Résume.", fast=True),
+        "lente": config.CommandConfig("Lente."),
+    }
+    assert len(cfg.problems) == 6
+    assert any("déjà une commande" in p for p in cfg.problems)
+    assert any("deux mots" in p for p in cfg.problems)
+    assert any("lente.couleur" in p for p in cfg.problems)
+
+
+def test_example_config_has_commands() -> None:
+    example = Path(__file__).parent.parent / "config" / "config.example.toml"
+    assert "traduis" in config.load(example).commands

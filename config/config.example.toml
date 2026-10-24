@@ -70,3 +70,14 @@ updates = true   # une erreur pendant une mise à jour, même quand pacman finit
 crashes = true   # une appli qui plante
 code = true      # erreurs du code à l'enregistrement (extension VS Code, integrations/vscode)
 ignore_units = []  # services à ignorer, par exemple ["NetworkManager-wait-online.service"]
+
+[commands]
+# Tes commandes « / » dans la carte : `/traduis` envoie sa consigne à Claude, avec la sélection
+# ou la capture comme toute question ; `/traduis good morning` y ajoute ce texte. Choisie dans
+# la liste, elle part tout de suite (tape une espace après son nom pour écrire la suite).
+# Un nom = un seul mot ; entre guillemets s'il a un accent ("résume"). fast = true : avec
+# fast_model, comme `/vite`. Prises en compte après `custos restart`.
+traduis = { prompt = "Traduis en français (ou en anglais si c'est déjà du français), sans commentaire.", fast = true }
+explique = "Explique-moi ça simplement, comme à un débutant."
+"résume" = { prompt = "Résume en trois points courts.", fast = true }
+corrige = { prompt = "Corrige l'orthographe et la grammaire, et donne seulement le texte corrigé.", fast = true }

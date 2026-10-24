@@ -2,21 +2,26 @@
 
 `/h caté` rouvre une conversation passée, `/v …` pose une question avec le modèle rapide,
 `/r` repose la dernière question, `/c` copie la dernière réponse, `/n` commence une nouvelle
-conversation, `/g` l'ouvre en grand. Ce qui n'est pas une
+conversation, `/g` l'ouvre en grand. S'y ajoutent les tiennes, écrites dans la section
+`[commands]` de la config (`/traduis`, `/résume`…). Ce qui n'est pas une
 commande connue (`/etc/fstab c'est quoi ?`) reste une question ordinaire.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 HISTORY, FAST, REPLAY, COPY, NEW, OPEN = "history", "fast", "replay", "copy", "new", "open"
+CUSTOM = "custom"  # une commande de la config : sa consigne devient la question
 
 
 @dataclass(frozen=True)
 class Command:
     name: str
-    alias: str
+    alias: str  # vide pour les tiennes
     description: str
     action: str
+    prompt: str = ""  # CUSTOM : la consigne envoyée à Claude
+    fast: bool = False  # CUSTOM : avec le modèle rapide, comme `/vite`
 
 
 COMMANDS = [
@@ -29,20 +34,43 @@ COMMANDS = [
 ]
 
 
-def parse(text: str) -> tuple[Command, str] | None:
+RESERVED = {word for command in COMMANDS for word in (command.name, command.alias)}
+
+
+def custom(name: str, prompt: str, fast: bool = False) -> Command:
+    """Une commande de la config (`traduis = "Traduis en français."`)."""
+    return Command(name, "", prompt, CUSTOM, prompt=prompt, fast=fast)
+
+
+def expand(command: Command, rest: str) -> str:
+    """Question d'une commande de la config : sa consigne, puis ce qui est tapé après.
+
+    La sélection et la capture sont jointes comme pour toute question : `/traduis` seul
+    traduit la sélection, `/traduis good morning` ce texte-là.
+    """
+    return f"{command.prompt}\n\n{rest}" if rest else command.prompt
+
+
+def parse(text: str, extra: Sequence[Command] = ()) -> tuple[Command, str] | None:
     """`/h caté` → (historique, « caté ») ; None si ce n'est pas une commande connue."""
     if not text.startswith("/"):
         return None
     word, _, rest = text[1:].partition(" ")
-    for command in COMMANDS:
+    if not word:
+        return None
+    for command in [*COMMANDS, *extra]:
         if word in (command.name, command.alias):
             return command, rest.strip()
     return None
 
 
-def completions(text: str) -> list[Command]:
+def completions(text: str, extra: Sequence[Command] = ()) -> list[Command]:
     """Commandes qui commencent par ce qui est tapé (`/` seul : toutes)."""
     if not text.startswith("/") or " " in text:
         return []
     word = text[1:]
-    return [c for c in COMMANDS if c.name.startswith(word) or c.alias.startswith(word)]
+    return [
+        c
+        for c in [*COMMANDS, *extra]
+        if c.name.startswith(word) or (c.alias and c.alias.startswith(word))
+    ]
