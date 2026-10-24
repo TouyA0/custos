@@ -150,11 +150,14 @@ def test_worker_env_preloads_layer_shell(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert supervisor.worker_env()["LD_PRELOAD"] == str(lib)
 
 
-def test_worker_env_uses_opengl_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_env_renders_without_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GSK_RENDERER", raising=False)
-    assert supervisor.worker_env()["GSK_RENDERER"] == "gl"
-    monkeypatch.setenv("GSK_RENDERER", "vulkan")  # choix explicite : respecté
-    assert supervisor.worker_env()["GSK_RENDERER"] == "vulkan"
+    monkeypatch.delenv("GDK_DISABLE", raising=False)
+    env = supervisor.worker_env()
+    assert env["GSK_RENDERER"] == "cairo" and env["GDK_DISABLE"] == "gl,vulkan,dmabuf"
+    monkeypatch.setenv("GSK_RENDERER", "gl")  # choix explicite : respecté, GPU permis
+    env = supervisor.worker_env()
+    assert env["GSK_RENDERER"] == "gl" and "GDK_DISABLE" not in env
 
 
 def test_status_when_stopped(capsys) -> None:

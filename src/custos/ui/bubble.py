@@ -1,9 +1,9 @@
 """Bulle : une petite carte blanche, minimaliste, dans la police du terminal.
 
-Une ligne pour demander, puis seulement la dernière réponse. ＋ démarre une nouvelle
-conversation, ↗ ouvre la conversation complète en grand (Claude Code dans un terminal).
+Une ligne pour demander, puis la dernière réponse (les précédentes au-dessus). « + » démarre
+une nouvelle conversation, « ouvrir » la montre en grand (Claude Code dans un terminal).
 Un clic n'importe où en dehors de la carte la ferme ; un travail en cours continue alors
-en fond (■ l'arrête). Pendant qu'il agit, une ligne montre l'étape en cours, et une
+en fond (« arrêter » l'arrête). Pendant qu'il agit, une ligne montre l'étape en cours, et une
 action sensible attend ici ton accord. Taper « / » propose des commandes (voir slash.py) :
 `/h` liste les conversations passées, ↑ ↓ et Entrée en rouvrent une.
 
@@ -32,6 +32,8 @@ from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.context import clipboard
 from custos.ui import markdown, slash
+from custos.ui.icons import Icon
+from custos.ui.icons import texture as icon_texture
 from custos.ui.position import Placement
 from custos.ui.theme import LIGHT_THEME, Theme, mix, rgba
 
@@ -39,7 +41,7 @@ WIDTH = 400
 MAX_HEIGHT = 360
 MAX_HISTORY = 10  # échanges précédents gardés au-dessus de la réponse
 HISTORY_PEEK = 72  # px : hauteur minimale quand il y a des échanges au-dessus, pour y remonter
-COPIED_FEEDBACK = 1500  # ms d'affichage du ✓ après une copie
+COPIED_FEEDBACK = 1500  # ms d'affichage de la coche après une copie
 FADE = 120  # ms : fondu de la carte à l'ouverture et à la fermeture
 RENDER_INTERVAL = 120  # ms : pendant l'arrivée d'une réponse, on redessine au plus ~8 fois/s
 FONT = "JetBrains Mono Nerd Font"  # la police du terminal (foot)
@@ -165,8 +167,8 @@ def image_drop_target(on_image: Callable[[Path, bool], None]) -> Gtk.DropTarget:
     return target
 
 
-def _icon_button(label: str, tooltip: str, on_click: Callable[..., None], *extra_classes: str) -> Gtk.Button:
-    button = Gtk.Button(label=label, tooltip_text=tooltip, valign=Gtk.Align.CENTER)
+def _icon_button(icon: str, tooltip: str, on_click: Callable[..., None], *extra_classes: str) -> Gtk.Button:
+    button = Gtk.Button(child=Icon(icon), tooltip_text=tooltip, valign=Gtk.Align.CENTER)
     button.add_css_class("icon")
     for css_class in extra_classes:
         button.add_css_class(css_class)
@@ -256,16 +258,16 @@ class Bubble:
         header = Gtk.Box(spacing=2)
         self.info = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
         self.info.set_max_width_chars(1)  # sinon un texte tronqué réclame quand même toute sa largeur
-        self.new_button = _icon_button("＋", "Nouvelle conversation", lambda *_: self.on_new())
+        self.new_button = _icon_button("plus", "Nouvelle conversation", lambda *_: self.on_new())
         self.open_button = _icon_button(
-            "↗", "Ouvrir la conversation en grand", lambda *_: self.on_open_full()
+            "open", "Ouvrir la conversation en grand", lambda *_: self.on_open_full()
         )
-        self.stop_button = _icon_button("■", "Arrêter", lambda *_: self.on_stop())
+        self.stop_button = _icon_button("stop", "Arrêter", lambda *_: self.on_stop())
         header.append(self.info)
         header.append(self.stop_button)
         header.append(self.new_button)
         header.append(self.open_button)
-        header.append(_icon_button("✕", "Fermer (Échap)", lambda *_: self.close()))
+        header.append(_icon_button("close", "Fermer (Échap)", lambda *_: self.close()))
 
         # Les échanges précédents au-dessus de la réponse : la carte s'ouvre sur la réponse,
         # on remonte pour les relire (ou ↑ ↓ dans le champ vide). Pas de bouton.
@@ -327,8 +329,13 @@ class Bubble:
         """Action sensible : ce qu'il veut faire, en entier, et tes trois réponses."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
         box.add_css_class("permission")
-        title = Gtk.Label(label="⚠ Action sensible : je fais ça ?", xalign=0)
-        title.add_css_class("title")
+        title = Gtk.Box(spacing=6)
+        warning = Icon("alert", 14)
+        warning.add_css_class("title")
+        title.append(warning)
+        title_label = Gtk.Label(label="Action sensible : je fais ça ?", xalign=0)
+        title_label.add_css_class("title")
+        title.append(title_label)
         self.permission_label = Gtk.Label(xalign=0, wrap=True, selectable=True, focusable=False)
         self.permission_label.set_wrap_mode(Pango.WrapMode.CHAR)
         self.permission_label.set_max_width_chars(1)
@@ -398,7 +405,7 @@ class Bubble:
         scroller.set_propagate_natural_height(True)
         scroller.set_child(label)
         scroller.add_css_class("code")
-        copy = _icon_button("⧉", "Copier", lambda button: self._on_copy(button, code), "copy")
+        copy = _icon_button("copy", "Copier", lambda button: self._on_copy(button, code), "copy")
         copy.set_halign(Gtk.Align.END)
         copy.set_valign(Gtk.Align.START)
         block = Gtk.Overlay(child=scroller)
@@ -437,12 +444,14 @@ class Bubble:
         self.attachments = count
         position = Gtk.EntryIconPosition.SECONDARY
         if count:
-            self.entry.set_icon_from_icon_name(position, "image-x-generic-symbolic")
+            scale = self.window.get_scale_factor()
+            muted = mix(self.theme.card, self.theme.text, 0.6)
+            self.entry.set_icon_from_paintable(position, icon_texture("image", muted, 16 * scale))
             plural = "s" if count > 1 else ""
             self.entry.set_icon_tooltip_text(position, f"{count} image{plural} jointe{plural} · clic : retirer")
             self.entry.set_placeholder_text("Entrée : que vois-tu ?")
         else:
-            self.entry.set_icon_from_icon_name(position, None)
+            self.entry.set_icon_from_paintable(position, None)
             if self.answer:
                 self.entry.set_placeholder_text("Répondre…")
         self.entry.grab_focus()
@@ -525,7 +534,7 @@ class Bubble:
         self._render(from_top=True)
 
     def set_status(self, text: str) -> None:
-        """Étape en cours (« ▶ journalctl -b -1 »), à côté des points d'attente."""
+        """Étape en cours (« $ journalctl -b -1 »), à côté des points d'attente."""
         self.status = text
         self._render()
 
@@ -873,9 +882,10 @@ class Bubble:
             self.suggestions.select_row(target)
 
     def _on_copy(self, button: Gtk.Button, code: str) -> None:
-        if clipboard.copy(code):
-            button.set_label("✓")
-            GLib.timeout_add(COPIED_FEEDBACK, lambda: button.set_label("⧉") or GLib.SOURCE_REMOVE)
+        icon = button.get_child()
+        if clipboard.copy(code) and isinstance(icon, Icon):
+            icon.set_icon("check")
+            GLib.timeout_add(COPIED_FEEDBACK, lambda: icon.set_icon("copy") or GLib.SOURCE_REMOVE)
 
     def _on_key(self, _controller, keyval: int, _keycode: int, state: Gdk.ModifierType) -> bool:
         listing = self.suggestions.get_visible()

@@ -92,7 +92,7 @@ def test_no_sandbox_when_disabled_or_missing(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_describe_tool_steps() -> None:
     home = str(Path.home())
-    assert claude.describe_tool("Bash", {"command": "journalctl -b -1\n| tail"}) == "▶ journalctl -b -1"
+    assert claude.describe_tool("Bash", {"command": "journalctl -b -1\n| tail"}) == "$ journalctl -b -1"
     assert claude.describe_tool("Read", {"file_path": f"{home}/.config/x"}) == "lit ~/.config/x"
     assert claude.describe_tool("WebSearch", {"query": "CEC anges"}) == "cherche sur le web : CEC anges"
     assert claude.describe_tool("Inconnu", {}) == "Inconnu"
@@ -103,7 +103,7 @@ def test_parse_tools_from_assistant_message() -> None:
         {"type": "text", "text": "Je regarde."},
         {"type": "tool_use", "name": "Bash", "input": {"command": "uptime"}},
     ]}})
-    assert claude.parse_tools(line) == ["▶ uptime"]
+    assert claude.parse_tools(line) == ["$ uptime"]
     assert claude.parse_tools(json.dumps({"type": "user"})) == []
 
 

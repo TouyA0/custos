@@ -129,8 +129,10 @@ MENU_INTERFACE = """
 """
 
 # Entrées du menu : (texte, action) où l'action est une fonction, une liste d'entrées
-# (sous-menu) ou None (titre de section, grisé) ; None seul : un séparateur.
-MenuEntry = tuple[str, "Callable[[], None] | Sequence[MenuEntry | None] | None"] | None
+# (sous-menu) ou None (titre de section, grisé) ; None seul : un séparateur. Un troisième
+# élément, (icône, couleur), ajoute une icône (voir icons.py) : (texte, action, ("check", "#4caf50")).
+MenuEntry = tuple | None
+MENU_ICON_SIZE = 32  # pixels de l'image envoyée à la barre
 
 
 class Menu:
@@ -165,9 +167,12 @@ class Menu:
                     items[number] = ({"type": "separator"}, [])
                     shape.append(None)
                 else:
-                    label, action = entry
+                    label, action, *icon = entry
                     # « _ » souligne la lettre suivante (raccourci) : on le double.
                     props: dict = {"label": label.replace("_", "__")}
+                    if icon:
+                        props["icon-data"] = _icon_png(*icon[0])
+                        shape.append(icon[0])
                     children: list[int] = []
                     items[number] = (props, children)
                     shape.append(label)
@@ -213,10 +218,28 @@ class Menu:
         return True
 
 
+_icon_cache: dict[tuple[str, str], bytes] = {}
+
+
+def _icon_png(name: str, color: str) -> bytes:
+    key = (name, color)
+    if key not in _icon_cache:
+        from custos.ui import icons
+
+        _icon_cache[key] = icons.png(name, color, MENU_ICON_SIZE)
+    return _icon_cache[key]
+
+
+def _variant(value) -> GLib.Variant:
+    if isinstance(value, bool):
+        return GLib.Variant("b", value)
+    if isinstance(value, bytes):
+        return GLib.Variant("ay", value)
+    return GLib.Variant("s", value)
+
+
 def _props(props: dict) -> dict[str, GLib.Variant]:
-    return {
-        key: GLib.Variant("b" if isinstance(value, bool) else "s", value) for key, value in props.items()
-    }
+    return {key: _variant(value) for key, value in props.items()}
 
 
 def add_dot(argb: bytearray, size: int, color: tuple[int, int, int]) -> None:

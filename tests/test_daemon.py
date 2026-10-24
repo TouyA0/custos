@@ -525,7 +525,7 @@ def test_attached_window_is_captured_even_if_not_active(monkeypatch, ui, collect
     d.open_from_mascot()
     assert collected[0]["window"] == BROWSER
     assert collected[0]["screenshot"] is True
-    assert ui.prompts[0][0] == "📌 Brave browser"
+    assert ui.prompts[0][0] == "accrochée à Brave browser"
 
 
 def test_selection_ignores_attached_window(monkeypatch, ui, collected) -> None:
@@ -925,12 +925,12 @@ def answer_permission_when_asked(d, ui, choice) -> threading.Thread:
 
 def test_agent_keeps_only_conclusion(monkeypatch, ui) -> None:
     monkeypatch.setattr(claude, "ask", agent_ask(
-        [("text", "Je regarde le journal."), ("tool", "▶ journalctl -b -1"), ("text", "C'est le PSR.")]
+        [("text", "Je regarde le journal."), ("tool", "$ journalctl -b -1"), ("text", "C'est le PSR.")]
     ))
     use_context(monkeypatch, Context(window=WINDOW))
     d = daemon.Daemon(Config(), ui)
     d.handle({"type": "ask", "question": "pourquoi ça a crashé ?"})
-    assert ui.statuses == ["▶ journalctl -b -1"] and ui.resets == 1
+    assert ui.statuses == ["$ journalctl -b -1"] and ui.resets == 1
     assert ui.answers == ["C'est le PSR."]
 
 
@@ -946,7 +946,7 @@ def test_sensitive_action_waits_for_answer_and_always_is_remembered(monkeypatch,
 
 
 def test_closed_card_shows_waiting_badge_and_click_shows_request(monkeypatch, ui) -> None:
-    monkeypatch.setattr(claude, "ask", agent_ask([("tool", "▶ ls"), ("permission", "rm x")]))
+    monkeypatch.setattr(claude, "ask", agent_ask([("tool", "$ ls"), ("permission", "rm x")]))
     use_context(monkeypatch, Context(window=WINDOW))
     d = daemon.Daemon(Config(), ui)
     worker = threading.Thread(target=d.handle, args=({"type": "ask", "question": "range"},))
@@ -958,7 +958,7 @@ def test_closed_card_shows_waiting_badge_and_click_shows_request(monkeypatch, ui
     d.close_bubble()
     assert ui.notices[-1] == daemon.CUSTOS_WAITING
     d.open_from_mascot()
-    assert ui.progress[-1] == ("range", "▶ ls", "", "rm x")
+    assert ui.progress[-1] == ("range", "$ ls", "", "rm x")
     d.permission_answer(claude.DENY)
     worker.join(2)
     assert ui.answers == ["[deny]"]
@@ -1199,7 +1199,10 @@ def test_tray_menu_lists_recent_conversations_and_agents(monkeypatch, ui, agents
     d = daemon.Daemon(Config(), ui)
     d.handle(agent("Notification", notification="permission_prompt"))
     labels = [entry[0] if entry else None for entry in d.tray_menu()]
-    assert labels == ["Poser une question", "Conversations récentes", None, "Sessions Claude Code", "✋ projet"]
+    assert labels == [
+        "Poser une question", "Conversations récentes", None, "Sessions Claude Code", "projet · attend ton accord",
+    ]
+    assert d.tray_menu()[4][2] == ("attention", "#e8743b")  # icône orange, pas d'emoji
 
     menu = d.tray_menu()
     conversation = menu[1][1][0]

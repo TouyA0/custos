@@ -22,13 +22,13 @@ gi.require_version("Gsk", "4.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gsk, Gtk, Pango
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Graphene, Gsk, Gtk
 from gi.repository import Gtk4LayerShell as LayerShell
 
 from custos.config import MascotConfig
 from custos.context import hyprland
 from custos.states import MascotState
-from custos.ui import position, theme
+from custos.ui import icons, position, theme
 from custos.ui.animation import ALL_SPRITES, Animator
 from custos.ui.bubble import WIDTH as BUBBLE_WIDTH
 from custos.ui.bubble import Bubble, image_drop_target
@@ -45,16 +45,23 @@ HALO_OPACITY = 0.9
 BADGE_RADIUS = 0.13  # fraction de la taille de la mascotte
 BADGE_PULSE = 1.4  # secondes
 BADGE_BORDER_WIDTH = 2.0
-BADGE_FILL = Gdk.RGBA(red=0.937, green=0.914, blue=0.875, alpha=1.0)  # crème #efe9df
-BADGE_BORDER = Gdk.RGBA(red=0.122, green=0.176, blue=0.310, alpha=1.0)  # marine #1f2d4f
-BADGE_ICONS = {
-    "selection": "📋",
-    "clipboard-image": "🖼\ufe0f",
-    "screenshot": "🖼\ufe0f",
-    "agent-waiting": "✋",  # une session Claude Code attend ta permission
-    "agent-done": "✅",  # une session Claude Code a fini
-    "custos-waiting": "✋",  # carte fermée : Custos attend ton accord pour une action
-    "answer-ready": "✅",  # carte fermée : Custos a fini
+CREAM = Gdk.RGBA(red=0.937, green=0.914, blue=0.875, alpha=1.0)  # #efe9df
+NAVY = Gdk.RGBA(red=0.122, green=0.176, blue=0.310, alpha=1.0)  # #1f2d4f
+WHITE = Gdk.RGBA(red=1.0, green=1.0, blue=1.0, alpha=1.0)
+ORANGE = Gdk.RGBA(red=0.910, green=0.455, blue=0.231, alpha=1.0)  # #e8743b, comme la barre
+GREEN = Gdk.RGBA(red=0.298, green=0.686, blue=0.314, alpha=1.0)  # #4caf50
+REMARKED = (CREAM, NAVY)  # Custos a remarqué quelque chose : discret
+WAITING = (ORANGE, WHITE)  # quelqu'un attend ton accord
+FINISHED = (GREEN, WHITE)  # c'est fini, à lire
+# Badge : (icône, (fond, trait)) ; les couleurs vives restent jusqu'à ce que tu ailles voir.
+BADGES = {
+    "selection": ("text", REMARKED),
+    "clipboard-image": ("image", REMARKED),
+    "screenshot": ("screenshot", REMARKED),
+    "agent-waiting": ("attention", WAITING),  # une session Claude Code attend ta permission
+    "agent-done": ("check", FINISHED),  # une session Claude Code a fini
+    "custos-waiting": ("attention", WAITING),  # carte fermée : Custos attend ton accord
+    "answer-ready": ("check", FINISHED),  # carte fermée : Custos a fini
 }
 # Restent jusqu'à ce que tu ailles voir.
 PERSISTENT_BADGES = {"agent-waiting", "agent-done", "custos-waiting", "answer-ready"}
@@ -172,7 +179,8 @@ class MascotWidget(Gtk.Widget):
         snapshot.restore()
 
     def _draw_badge(self, snapshot: Gtk.Snapshot) -> None:
-        """Pastille en haut à droite : Custos a remarqué quelque chose (📋 texte, 🖼 image)."""
+        """Pastille en haut à droite : ce que Custos a remarqué (texte, image…) ou ce qui
+        t'attend (orange : ton accord ; vert : c'est fini)."""
         pulse = 1 + 0.08 * math.sin(2 * math.pi * time.monotonic() / BADGE_PULSE)
         radius = self.size * BADGE_RADIUS * pulse
         cx, cy = self.size * 0.34, -self.size * 0.36
@@ -181,21 +189,19 @@ class MascotWidget(Gtk.Widget):
         circle = Gsk.RoundedRect()
         circle.init_from_rect(bounds, radius)
 
+        icon, (fill, ink) = BADGES.get(self.notice, ("sparkle", REMARKED))
         snapshot.push_rounded_clip(circle)
-        snapshot.append_color(BADGE_FILL, bounds)
+        snapshot.append_color(fill, bounds)
         snapshot.pop()
-        snapshot.append_border(circle, [BADGE_BORDER_WIDTH] * 4, [BADGE_BORDER] * 4)
+        border = NAVY if fill is CREAM else WHITE
+        snapshot.append_border(circle, [BADGE_BORDER_WIDTH] * 4, [border] * 4)
 
-        layout = self.create_pango_layout(BADGE_ICONS.get(self.notice, "✨"))
-        font = Pango.FontDescription.from_string("sans")
-        font.set_absolute_size(radius * 1.1 * Pango.SCALE)
-        layout.set_font_description(font)
-        _ink, logical = layout.get_pixel_extents()
+        side = radius * 1.25
         origin = Graphene.Point()
-        origin.init(cx - logical.width / 2, cy - logical.height / 2)
+        origin.init(cx - side / 2, cy - side / 2)
         snapshot.save()
         snapshot.translate(origin)
-        snapshot.append_layout(layout, BADGE_BORDER)
+        icons.draw(snapshot, icon, side, ink)
         snapshot.restore()
 
 

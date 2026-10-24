@@ -22,7 +22,11 @@ from pathlib import Path
 log = logging.getLogger("custos.supervisor")
 
 LAYER_SHELL_LIB = Path("/usr/lib/libgtk4-layer-shell.so")
-GSK_RENDERER = "gl"  # moteur de rendu GTK : OpenGL
+# Rendu entièrement logiciel : Custos ne touche pas à la carte graphique. Avec le rendu GPU
+# de GTK (Vulkan, puis OpenGL), le PC entier se figeait : 5 gels en une journée sur Intel
+# Raptor Lake (i915), aucun avant Custos. Une mascotte de 115 px se dessine très bien au CPU.
+GSK_RENDERER = "cairo"
+GDK_DISABLE = "gl,vulkan,dmabuf"  # pas de contexte GPU du tout, ni de tampons partagés
 MAX_LOG_SIZE = 1024 * 1024  # au-delà, le log devient custos.log.1 (l'ancien .1 est supprimé)
 CRASH_WINDOW = 60.0  # secondes
 MAX_CRASHES = 5  # plantages tolérés dans CRASH_WINDOW avant d'abandonner
@@ -83,9 +87,10 @@ def worker_env() -> dict[str, str]:
     preload = env.get("LD_PRELOAD", "")
     if LAYER_SHELL_LIB.exists() and "libgtk4-layer-shell" not in preload:
         env["LD_PRELOAD"] = f"{LAYER_SHELL_LIB} {preload}".strip()
-    # Rendu OpenGL plutôt que Vulkan (défaut de GTK 4.24) : la mascotte redessine en
-    # continu, et Vulkan (Mesa ANV, i915) figeait tout le PC. GSK_RENDERER=vulkan pour revenir.
+    # Rendu logiciel (voir GSK_RENDERER) ; GSK_RENDERER=gl dans l'environnement pour revenir au GPU.
     env.setdefault("GSK_RENDERER", GSK_RENDERER)
+    if env["GSK_RENDERER"] == GSK_RENDERER:
+        env.setdefault("GDK_DISABLE", GDK_DISABLE)
     return env
 
 

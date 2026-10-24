@@ -49,7 +49,12 @@ ANSWER_READY = "answer-ready"
 ALERT_WAITING, ALERT_DONE = "waiting", "done"  # pastille de l'icône de la barre (voir tray)
 OUTPUT_TIMEOUT = 5.0  # secondes : au-delà, une sortie reçue n'est plus celle demandée
 MENU_HISTORY = 6  # conversations récentes dans le menu de l'icône
-AGENT_ICONS = {"working": "⏳", "waiting": "✋", "done": "✅"}  # sessions Claude Code, dans le menu
+# Sessions Claude Code dans le menu de l'icône : (état en toutes lettres, (icône, couleur)).
+AGENT_STATES = {
+    "working": ("travaille", ("working", "#d9a33a")),
+    "waiting": ("attend ton accord", ("attention", "#e8743b")),
+    "done": ("a fini", ("check", "#4caf50")),
+}
 
 
 class UI(Protocol):
@@ -113,7 +118,7 @@ class Work:
     """La question à laquelle Claude travaille en ce moment."""
 
     question: str
-    status: str = ""  # étape en cours (« ▶ journalctl -b -1 »)
+    status: str = ""  # étape en cours (« $ journalctl -b -1 »)
     chunks: list[str] = field(default_factory=list)  # réponse reçue depuis la dernière étape
     permission: claude.Permission | None = None  # action qui attend ton accord
     choice: str = claude.DENY
@@ -268,18 +273,18 @@ class Daemon:
 
     @_locked
     def new_conversation(self) -> None:
-        """Bouton ＋ : oublie la conversation en cours et en commence une nouvelle."""
+        """Bouton « + » : oublie la conversation en cours et en commence une nouvelle."""
         self.close_session()
         self.ask({"type": "ask", "new": True})
 
     @_locked
     def close_bubble(self) -> None:
-        """Carte fermée : le travail en cours continue en fond (■ l'arrête), et la
+        """Carte fermée : le travail en cours continue en fond (« arrêter » l'arrête), et la
         conversation reste un moment pour la reprendre."""
         self.card_open = False
         self._closed_at = time.monotonic()
         if self.work:
-            self._show_badge()  # ✋ s'il attend ton accord
+            self._show_badge()  # badge orange s'il attend ton accord
             return
         session = self.session
         if session and not session.claude_session:
@@ -303,7 +308,7 @@ class Daemon:
         self.session = Session(
             Context(),
             claude_session=found.session,
-            summary=f"🕘 {history.when(found.updated)}",
+            summary=f"reprise · {history.when(found.updated)}",
             last_question=found.last_question,
             last_answer=found.last_answer,
             exchanges=list(found.exchanges),
@@ -311,7 +316,7 @@ class Daemon:
         self._reopen()
 
     def stop(self) -> None:
-        """Bouton ■ : arrête la réponse ou la tâche en cours."""
+        """Bouton « arrêter » : arrête la réponse ou la tâche en cours."""
         self._cancel.set()
 
     @_locked
@@ -673,7 +678,7 @@ class Daemon:
             self.notice = Notice(ANSWER_READY, time.monotonic())
 
     def _ask_permission(self, session: Session, work: Work, permission: claude.Permission) -> str:
-        """Action sensible : on attend ta réponse dans la carte (✋ sur la mascotte si elle
+        """Action sensible : on attend ta réponse dans la carte (badge orange sur la mascotte si elle
         est fermée). Appelé dans le thread de la réponse, qui attend ici, sans le verrou."""
         key = (permission.tool, permission.description)
         with self._lock:
@@ -748,10 +753,9 @@ class Daemon:
             agents = sorted(self.agents.values(), key=lambda a: a.at, reverse=True)
         if agents:
             entries += [None, ("Sessions Claude Code", None)]
-            entries += [
-                (f"{AGENT_ICONS.get(a.state, '•')} {a.project}", _in_thread(self.go_to_agent, a.session))
-                for a in agents
-            ]
+            for a in agents:
+                state, icon = AGENT_STATES.get(a.state, (a.state, ("sparkle", "#9e9e9e")))
+                entries.append((f"{a.project} · {state}", _in_thread(self.go_to_agent, a.session), icon))
         return entries
 
     @_locked

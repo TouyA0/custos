@@ -108,10 +108,10 @@ def _home(text: str) -> str:
 
 
 def describe_tool(name: str, data: dict) -> str:
-    """Étape en cours, en une ligne : « ▶ journalctl -b -1 », « lit ~/.config/… »."""
+    """Étape en cours, en une ligne : « $ journalctl -b -1 », « lit ~/.config/… »."""
     if name == "Bash":
         command = (data.get("command") or "").strip().splitlines()
-        return f"▶ {_home(command[0])}" if command else "▶ commande"
+        return f"$ {_home(command[0])}" if command else "$ commande"
     if name == "Read":
         return f"lit {_home(data.get('file_path', ''))}"
     if name in ("Edit", "Write", "NotebookEdit"):

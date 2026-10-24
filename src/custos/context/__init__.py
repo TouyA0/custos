@@ -101,7 +101,7 @@ def describe(context: Context) -> str:
         if context.failure.get("output"):
             parts.append("sortie jointe")
     elif context.attached and app:
-        parts.append(f"📌 {app}")
+        parts.append(f"accrochée à {app}")
     if context.selection:
         parts.append(f"sélection : {len(context.selection)} car.")
     if context.screenshot:
