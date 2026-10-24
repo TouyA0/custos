@@ -110,6 +110,18 @@ def test_big_log_is_rotated(dirs: Path) -> None:
     assert supervisor.log_path().stat().st_size < 10_000
 
 
+def test_log_is_rotated_while_running(dirs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(supervisor, "MAX_LOG_SIZE", 5_000)
+    chatty = dirs / "chatty.py"
+    chatty.write_text("for i in range(500):\n    print(f'ligne {i} du daemon', flush=True)\n")
+    supervisor.supervise([sys.executable, str(chatty)], backoff=0)
+    log, old = supervisor.log_path(), supervisor.log_path().with_suffix(".log.1")
+    assert log.stat().st_size <= 5_000 and old.stat().st_size <= 5_000
+    assert "ligne 499 du daemon" in old.read_text() + log.read_text()  # rien de perdu à la fin
+    assert "arrêté" in log.read_text()
+    assert not supervisor.log_path().with_suffix(".log.2").exists()  # un seul ancien log
+
+
 def test_worker_env_preloads_layer_shell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     lib = tmp_path / "libgtk4-layer-shell.so"
     lib.write_bytes(b"")
