@@ -59,3 +59,14 @@ duration = 10       # secondes d'affichage du badge
 # Badges pour tes sessions Claude Code : ✋ attend ta permission, ✅ a fini (un clic va à sa
 # fenêtre). Nécessite les hooks de integrations/claude-code/settings.json.
 enabled = true
+
+[system]
+# Custos remarque (localement, sans appeler Claude) les problèmes de ta machine : la mascotte
+# s'inquiète, un badge ambre s'allume, et un clic ouvre la carte avec les preuves (état du
+# service, lignes d'erreur…), prête à demander de l'aide.
+services = true  # un service systemd (système ou utilisateur) en échec
+disk = true      # un disque presque plein (moins de 5 % libres, 10 Go au plus)
+updates = true   # une erreur pendant une mise à jour, même quand pacman finit « avec succès »
+crashes = true   # une appli qui plante
+code = true      # erreurs du code à l'enregistrement (extension VS Code, integrations/vscode)
+ignore_units = []  # services à ignorer, par exemple ["NetworkManager-wait-online.service"]

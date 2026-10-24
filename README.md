@@ -86,7 +86,7 @@ Un clic sur la mascotte (ou `custos ask`) ouvre une petite carte : tape ta quest
 Entrée, et seule la réponse s'affiche, au fil de l'eau. « Répondre… » pose une question
 de suivi : la carte reste sur la dernière réponse, et les échanges précédents sont juste
 au-dessus (remonte pour les relire, ou ↑ ↓ dans le champ vide). Rouvrir la carte dans
-les 10 minutes reprend la conversation ; ＋ en démarre une nouvelle. ↗ (ou `custos open`)
+les 10 minutes reprend la conversation ; le bouton + en démarre une nouvelle. Le bouton « ouvrir » (ou `custos open`)
 ouvre la conversation complète en grand : Claude Code dans un terminal, avec
 `claude --resume`. Un clic en dehors de la carte, Échap ou ✕ la ferment.
 
@@ -100,11 +100,11 @@ Une question qui commence par un chemin (`/etc/fstab c'est quoi ?`) reste une qu
 
 Quand il agit (« mon PC a crashé, trouve et règle le problème », « ouvre-moi le
 Catéchisme sur les anges »), la carte montre l'étape en cours (`▶ journalctl -b -1`), puis
-seulement sa conclusion ; le détail de ce qu'il a fait est dans la conversation en grand (↗).
+seulement sa conclusion ; le détail de ce qu'il a fait est dans la conversation en grand (bouton « ouvrir »).
 Une action sensible attend ton accord dans la carte : **Autoriser**, **Toujours** (pour cette
 conversation) ou **Refuser**. Tu peux fermer la carte pendant qu'il travaille : il continue,
-la mascotte affiche ✋ s'il a besoin de toi et ✅ quand il a fini, et un clic rouvre la carte
-où il en est. ■ l'arrête. Pour une commande en root, il t'ouvre un terminal avec la commande
+la mascotte affiche un badge orange s'il a besoin de toi et vert quand il a fini, et un clic rouvre la carte
+où il en est. Le bouton carré l'arrête. Pour une commande en root, il t'ouvre un terminal avec la commande
 prête (`custos terminal '…'`) : c'est toi qui la valides et tapes ton mot de passe.
 
 Custos détecte ta machine (distribution, Hyprland, terminal, shell, caelestia, yay…) pour
@@ -117,10 +117,30 @@ ou sur la carte (depuis tes fichiers ou un navigateur) : une petite icône dans 
 indique qu'elle est jointe à ta prochaine question (un clic la retire).
 
 Custos remarque aussi, localement et sans appeler Claude, ce que tu pourrais vouloir lui
-montrer : un texte sélectionné (📋), une image copiée ou une capture `SUPER + SHIFT + S`
-de caelestia (🖼️). Un badge s'allume quelques secondes sur la mascotte ; un clic ouvre la
+montrer : un texte sélectionné, une image copiée ou une capture `SUPER + SHIFT + S`
+de caelestia. Un badge s'allume quelques secondes sur la mascotte ; un clic ouvre la
 bulle avec ce contenu. Après une commande en échec, le clic propose plutôt de l'expliquer.
 Réglages dans la section `[notice]` de la config.
+
+Il veille aussi sur la machine, toujours localement : un **service systemd en échec**
+(système ou utilisateur), un **disque presque plein** (moins de 5 % libres, 10 Go au plus),
+une **erreur pendant une mise à jour** (lue dans `/var/log/pacman.log`, même quand pacman
+finit « avec succès », par exemple un script d'après mise à jour qui échoue) et une **appli
+qui plante** (coredump). La mascotte s'inquiète, un badge ambre s'allume (et la pastille de
+l'icône de la barre, dont le menu liste tout sous « À regarder ») ; un clic ouvre la carte
+avec les preuves déjà rassemblées (état du service et son journal, lignes d'erreur, trace
+du plantage…), secrets masqués : Entrée demande à Claude d'expliquer et de réparer. Une
+alerte par problème, qui s'éteint seule s'il disparaît (service relancé, place libérée).
+Réglages dans la section `[system]` de la config.
+
+**VS Code** : le terminal intégré tourne en bash, d'où le hook bash ci-dessous. Pour les
+erreurs du code lui-même, une petite extension prévient Custos à l'enregistrement d'un
+fichier, seulement quand son nombre d'erreurs augmente (pas à chaque faute de frappe) ;
+l'alerte s'éteint quand le fichier n'en a plus. Installation (puis « Reload Window ») :
+
+```bash
+python scripts/install_vscode_extension.py
+```
 
 ## Intégration au bureau (Hyprland + caelestia + fish)
 
@@ -141,12 +161,16 @@ fish_add_path -g ~/.local/bin
 source ~/Documents/Projets/custos/integrations/shell/custos.fish
 ```
 
-Puis `hyprctl reload`. Un hook bash existe aussi : `integrations/shell/custos.bash`.
+Puis `hyprctl reload`. Pour bash (dont le terminal de VS Code), à la fin de `~/.bashrc` :
+
+```bash
+source ~/Documents/Projets/custos/integrations/shell/custos.bash
+```
 
 **Tes sessions Claude Code** : avec les hooks de `integrations/claude-code/settings.json`
-ajoutés à `~/.claude/settings.json`, la mascotte affiche ✋ quand une session attend ta
-permission et ✅ quand elle a fini. Un clic t'emmène dans sa fenêtre (terminal, VS Code,
-appli Claude…). ✋ reste tant qu'elle attend, ✅ jusqu'à ce que tu ailles voir. Tout est local :
+ajoutés à `~/.claude/settings.json`, la mascotte affiche un badge orange quand une session
+attend ta permission et vert quand elle a fini. Un clic t'emmène dans sa fenêtre (terminal, VS Code,
+appli Claude…). L'orange reste tant qu'elle attend, le vert jusqu'à ce que tu ailles voir. Tout est local :
 Custos ne lit que l'état de la session, jamais son contenu (`[agents]` dans la config).
 
 Pour que Claude voie aussi la **sortie d'une commande en échec** (le message d'erreur, pas

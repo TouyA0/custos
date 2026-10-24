@@ -35,10 +35,12 @@ MENU_PATH = "/MenuBar"
 MENU_INTERFACE_NAME = "com.canonical.dbusmenu"
 ICON_SIZES = (22, 32, 48, 64)
 TOOLTIP = "Clic : ranger ou afficher la mascotte · clic droit : lui poser une question"
-WAITING, DONE = "waiting", "done"  # alertes : il attend ton accord, ou il a fini
-DOT_COLORS = {WAITING: (232, 116, 59), DONE: (76, 175, 80)}  # orange, vert (RGB)
+WAITING, DONE, PROBLEM = "waiting", "done", "problem"  # attend ton accord, a fini, à regarder
+DOT_COLORS = {WAITING: (232, 116, 59), DONE: (76, 175, 80), PROBLEM: (217, 163, 58)}  # orange, vert, ambre
 DOT_RADIUS = 0.22  # fraction de la taille de l'icône
-ICON_NAMES = {None: "custos-tray", WAITING: "custos-tray-waiting", DONE: "custos-tray-done"}
+ICON_NAMES = {
+    None: "custos-tray", WAITING: "custos-tray-waiting", DONE: "custos-tray-done", PROBLEM: "custos-tray-problem",
+}
 FILE_SIZE = 64  # pixels des fichiers PNG
 
 INTERFACE = """

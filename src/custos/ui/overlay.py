@@ -50,9 +50,11 @@ NAVY = Gdk.RGBA(red=0.122, green=0.176, blue=0.310, alpha=1.0)  # #1f2d4f
 WHITE = Gdk.RGBA(red=1.0, green=1.0, blue=1.0, alpha=1.0)
 ORANGE = Gdk.RGBA(red=0.910, green=0.455, blue=0.231, alpha=1.0)  # #e8743b, comme la barre
 GREEN = Gdk.RGBA(red=0.298, green=0.686, blue=0.314, alpha=1.0)  # #4caf50
+AMBER = Gdk.RGBA(red=0.851, green=0.639, blue=0.227, alpha=1.0)  # #d9a33a
 REMARKED = (CREAM, NAVY)  # Custos a remarqué quelque chose : discret
 WAITING = (ORANGE, WHITE)  # quelqu'un attend ton accord
 FINISHED = (GREEN, WHITE)  # c'est fini, à lire
+PROBLEM = (AMBER, NAVY)  # un problème de la machine, à regarder
 # Badge : (icône, (fond, trait)) ; les couleurs vives restent jusqu'à ce que tu ailles voir.
 BADGES = {
     "selection": ("text", REMARKED),
@@ -62,9 +64,10 @@ BADGES = {
     "agent-done": ("check", FINISHED),  # une session Claude Code a fini
     "custos-waiting": ("attention", WAITING),  # carte fermée : Custos attend ton accord
     "answer-ready": ("check", FINISHED),  # carte fermée : Custos a fini
+    "system-problem": ("alert", PROBLEM),  # service, disque, mise à jour, plantage, code
 }
 # Restent jusqu'à ce que tu ailles voir.
-PERSISTENT_BADGES = {"agent-waiting", "agent-done", "custos-waiting", "answer-ready"}
+PERSISTENT_BADGES = {"agent-waiting", "agent-done", "custos-waiting", "answer-ready", "system-problem"}
 
 FOLLOW_INTERVAL = 200  # ms entre deux lectures de la position de la fenêtre accrochée
 DRAG_THRESHOLD = 6  # pixels : en dessous, c'est un clic
@@ -193,7 +196,7 @@ class MascotWidget(Gtk.Widget):
         snapshot.push_rounded_clip(circle)
         snapshot.append_color(fill, bounds)
         snapshot.pop()
-        border = NAVY if fill is CREAM else WHITE
+        border = NAVY if fill in (CREAM, AMBER) else WHITE
         snapshot.append_border(circle, [BADGE_BORDER_WIDTH] * 4, [border] * 4)
 
         side = radius * 1.25

@@ -12,6 +12,7 @@ MAX_OUTPUT = 8_000  # caractères : la fin de la sortie d'une commande, là où 
 
 DEFAULT_QUESTION = "Aide-moi avec ce texte : explique-le, ou corrige-le si c'est moi qui l'ai écrit."
 FAILURE_QUESTION = "Pourquoi cette commande a échoué, et comment la corriger ?"
+PROBLEM_QUESTION = "Explique ce problème et aide-moi à le réparer."
 
 
 @dataclass
@@ -21,6 +22,7 @@ class Context:
     screenshot: Path | None = None
     blocked: bool = False  # fenêtre active dans la liste noire : rien n'a été lu
     failure: dict | None = None  # commande shell en échec (message du hook)
+    problem: dict | None = None  # problème de la machine remarqué (voir system.Problem)
     attached: bool = False  # `window` est la fenêtre où la mascotte est accrochée
     image_kind: str = "window"  # d'où vient `screenshot` : window, clipboard ou screenshot
     # Images jointes par toi (collées, glissées), pour la prochaine question.
@@ -54,6 +56,7 @@ def collect(
     selection: bool = False,
     screenshot: bool = False,
     failure: dict | None = None,
+    problem: dict | None = None,
     image: Path | None = None,
     image_kind: str = "window",
     window: ActiveWindow | None = None,
@@ -64,6 +67,9 @@ def collect(
     `image` : image déjà prête (copie temporaire), jointe à la place d'une capture.
     `window` : fenêtre à lire (celle où la mascotte est accrochée) au lieu de la fenêtre active.
     """
+    if problem:
+        # Ses preuves suffisent : ni la fenêtre active ni sa capture n'ont de rapport.
+        return Context(problem=problem)
     window = window or hyprland.active_window()
     if window and privacy.is_blocked(window.window_class, window.title, config):
         return Context(window=window, blocked=True)
@@ -95,6 +101,8 @@ def describe(context: Context) -> str:
     (sans capture, son nom n'apprend rien)."""
     app = app_name(context.window.window_class) if context.window else ""
     parts = []
+    if context.problem:
+        parts.append(context.problem.get("title", "problème remarqué"))
     if context.failure:
         command = _short(privacy.redact_secrets(context.failure.get("command", "")))
         parts.append(f"commande en échec : {command}")
@@ -119,6 +127,8 @@ def _short(text: str, limit: int = 40) -> str:
 
 def hint(context: Context) -> str:
     """Texte du champ de saisie vide : ce que fera Entrée sans rien écrire."""
+    if context.problem:
+        return "Entrée : explique et aide-moi à réparer"
     if context.failure:
         return "Entrée : pourquoi ça a échoué ?"
     if context.selection:
@@ -130,6 +140,8 @@ def hint(context: Context) -> str:
 
 def default_question(context: Context) -> str | None:
     """Question utilisée quand on valide la bulle sans rien écrire."""
+    if context.problem:
+        return PROBLEM_QUESTION
     if context.failure:
         return FAILURE_QUESTION
     if context.selection:
@@ -141,6 +153,13 @@ def default_question(context: Context) -> str | None:
 
 def build_prompt(question: str | None, context: Context) -> str:
     parts = []
+    if context.problem:
+        # Rassemblé localement par Custos ; masqué avant l'envoi comme le reste.
+        details = privacy.redact_secrets(context.problem.get("details", ""))
+        parts.append(
+            f"Custos a remarqué ce problème sur ma machine : {context.problem.get('title', '')}"
+            + (f"\n```\n{details}\n```" if details else "")
+        )
     if context.window and not context.blocked:
         title = privacy.redact_secrets(context.window.title)
         parts.append(f"Fenêtre active : {context.window.window_class} — « {title} »")

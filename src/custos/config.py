@@ -79,6 +79,18 @@ class AgentsConfig:
 
 
 @dataclass
+class SystemConfig:
+    # Réactions locales (sans appeler Claude) aux problèmes de la machine : la mascotte
+    # s'inquiète, et un clic propose de les expliquer.
+    services: bool = True  # un service systemd en échec
+    disk: bool = True  # un disque presque plein
+    updates: bool = True  # une erreur dans une mise à jour (pacman.log)
+    crashes: bool = True  # une appli qui plante
+    code: bool = True  # des erreurs dans le code à l'enregistrement (extension VS Code)
+    ignore_units: list[str] = field(default_factory=list)  # services à ne pas surveiller
+
+
+@dataclass
 class NoticeConfig:
     selection: bool = True
     images: bool = True
@@ -95,6 +107,7 @@ class Config:
     shell: ShellConfig = field(default_factory=ShellConfig)
     notice: NoticeConfig = field(default_factory=NoticeConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
     # Ce qui a été ignoré à la lecture (faute de frappe, mauvais type…) : signalé au démarrage.
     problems: list[str] = field(default_factory=list)
 

@@ -15,7 +15,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Protocol
 
-from custos import claude, context, history, ipc, machine, terminal, watch
+from custos import claude, context, history, ipc, machine, system, terminal, watch
 from custos.config import Config, load, load_persona
 from custos.context import Context, clipboard, hyprland, images, privacy
 from custos.states import MascotState
@@ -47,6 +47,10 @@ WAITING_NOTIFICATIONS = {"permission_prompt", "elicitation_dialog"}
 CUSTOS_WAITING = "custos-waiting"
 ANSWER_READY = "answer-ready"
 ALERT_WAITING, ALERT_DONE = "waiting", "done"  # pastille de l'icône de la barre (voir tray)
+ALERT_PROBLEM = "problem"
+# Un problème de la machine remarqué localement (service, disque, mise à jour, plantage, code).
+SYSTEM_PROBLEM = "system-problem"
+MAX_CODE_ERRORS = 15  # erreurs du fichier jointes à la question
 OUTPUT_TIMEOUT = 5.0  # secondes : au-delà, une sortie reçue n'est plus celle demandée
 MENU_HISTORY = 6  # conversations récentes dans le menu de l'icône
 # Sessions Claude Code dans le menu de l'icône : (état en toutes lettres, (icône, couleur)).
@@ -176,6 +180,9 @@ class Daemon:
         self.agents: dict[str, Agent] = {}  # sessions Claude Code, par identifiant
         self.work: Work | None = None  # question en cours de traitement
         self.card_open = False  # la carte est affichée (sinon le travail continue en fond)
+        # Problèmes remarqués et pas encore regardés, par clé (voir system.Problem).
+        self.problems: dict[str, system.Problem] = {}
+        self._code_errors: dict[str, int] = {}  # erreurs par fichier, au dernier enregistrement
         self._lock = threading.RLock()  # l'état ci-dessus (voir la docstring de la classe)
 
     def handle(self, message: dict) -> None:
@@ -188,6 +195,8 @@ class Daemon:
                 self.shell_output(message)
             case "agent-event":
                 self.agent_event(message)
+            case "code-problem":
+                self.code_problem(message)
             case "attach":
                 self.attach_active()
             case "detach":
@@ -225,6 +234,7 @@ class Daemon:
             selection=bool(message.get("selection")),
             screenshot=bool(message.get("screen")) or target is not None,
             failure=message.get("failure"),
+            problem=message.get("problem"),
             image=Path(image) if image else None,
             image_kind=message.get("image_kind", "window"),
             window=target,
@@ -262,7 +272,7 @@ class Daemon:
         self.ui.show_progress(work.question, work.status, "".join(work.chunks), permission)
 
     def _can_resume(self, message: dict) -> bool:
-        fresh = ("question", "selection", "screen", "image", "failure", "new")
+        fresh = ("question", "selection", "screen", "image", "failure", "problem", "new")
         session = self.session
         return (
             not any(message.get(key) for key in fresh)
@@ -332,9 +342,10 @@ class Daemon:
     def open_from_mascot(self) -> None:
         """Clic sur la mascotte : propose d'abord ce qu'elle vient de remarquer.
 
-        Par ordre de priorité : une commande qui vient d'échouer, une sélection ou une
-        image remarquée, sinon une bulle vide. Avant tout ça : un agent Claude Code qui
-        attend ou qui a fini, dont elle affiche la fenêtre.
+        Par ordre de priorité : une commande qui vient d'échouer, un problème de la machine
+        (service, disque, mise à jour, plantage, code), une sélection ou une image remarquée,
+        sinon une bulle vide. Avant tout ça : un agent Claude Code qui attend ou qui a fini,
+        dont elle affiche la fenêtre.
         """
         if self.work:
             self._show_work()  # sa propre tâche d'abord : elle attend peut-être ton accord
@@ -360,6 +371,8 @@ class Daemon:
         if failure:
             # La fenêtre active est sans doute le terminal : sa capture montre le message d'erreur.
             self.ask({"type": "ask", "screen": True, "failure": failure})
+        elif self.problems:
+            self.open_problem(next(reversed(self.problems)))  # le plus récent
         elif notice and notice.kind == watch.SELECTION:
             self.ask({"type": "ask", "selection": True})
         elif notice:
@@ -464,6 +477,11 @@ class Daemon:
         elif waiting:
             kind = AGENT_WAITING
             alert, text = ALERT_WAITING, f"Claude Code ({waiting.project}) attend ta permission"
+        elif self.problems:
+            kind = SYSTEM_PROBLEM
+            latest = next(reversed(self.problems.values()))
+            more = len(self.problems) - 1
+            alert, text = ALERT_PROBLEM, _short(latest.title, 70) + (f" (+{more})" if more else "")
         else:
             kind = notice.kind if notice else None
             agent = self.agents.get(notice.path or "") if notice else None
@@ -473,6 +491,73 @@ class Daemon:
                 alert, text = ALERT_DONE, f"Custos a fini : {_short(self.session.last_question)}"
         self.ui.show_notice(kind)
         self.ui.set_alert(alert, text)
+
+    # --- problèmes de la machine (voir system.py) ------------------------------------
+
+    @_locked
+    def on_problem(self, problem: system.Problem) -> None:
+        """Problème remarqué localement : la mascotte s'inquiète, un badge ambre s'allume."""
+        self.problems.pop(problem.key, None)
+        self.problems[problem.key] = problem  # le plus récent en dernier
+        if not self.card_open:
+            self.ui.set_state(MascotState.WORRIED)
+        self._show_badge()
+
+    @_locked
+    def on_resolved(self, key: str) -> None:
+        """Le problème a disparu de lui-même (service relancé, place libérée…)."""
+        if self.problems.pop(key, None):
+            log.info("problème résolu de lui-même")
+            self._show_badge()
+
+    def open_problem(self, key: str) -> None:
+        """Clic sur la mascotte ou dans le menu : la carte s'ouvre avec ses preuves."""
+        with self._lock:
+            problem = self.problems.pop(key, None)
+            self._show_badge()
+        if problem:
+            self.ask({"type": "ask", "problem": problem.as_message()})
+
+    @_locked
+    def code_problem(self, message: dict) -> None:
+        """Erreurs d'un fichier à son enregistrement (extension VS Code).
+
+        Seulement quand leur nombre augmente : la mascotte ne s'inquiète pas d'erreurs déjà
+        connues. Plus aucune erreur : l'alerte s'éteint.
+        """
+        if not self.config.system.code:
+            return
+        path = str(message.get("file") or "")
+        count = int(message.get("count") or 0)
+        if not path:
+            return
+        key = f"code:{path}"
+        previous = self._code_errors.get(path, 0)
+        self._code_errors[path] = count
+        if count == 0:
+            self._code_errors.pop(path, None)
+            if self.problems.pop(key, None):
+                self._show_badge()
+            return
+        if count <= previous:
+            return
+        lines = []
+        for error in (message.get("errors") or [])[:MAX_CODE_ERRORS]:
+            where = f"ligne {error.get('line', '?')}"
+            source = f" [{error['source']}]" if error.get("source") else ""
+            lines.append(f"- {where}{source} : {error.get('message', '')}")
+        details = f"Fichier : {path}\n"
+        if message.get("workspace"):
+            details += f"Projet : {message['workspace']}\n"
+        details += f"Erreurs signalées par VS Code ({count}) :\n" + "\n".join(lines)
+        plural = "s" if count > 1 else ""
+        title = f"{count} erreur{plural} dans {Path(path).name}"
+        log.info("erreurs dans le code (%d)", count)
+        self.problems.pop(key, None)
+        self.problems[key] = system.Problem(system.CODE, key, title, details)
+        if not self.card_open:
+            self.ui.set_state(MascotState.WORRIED)
+        self._show_badge()
 
     # --- sessions Claude Code ------------------------------------------------------
 
@@ -748,6 +833,15 @@ class Daemon:
         récentes, sessions Claude Code. Les actions partent dans un thread : elles lisent le
         contexte ou des fichiers, et le menu est appelé depuis le thread GTK."""
         entries: list = [("Poser une question", _in_thread(self.ask, {"type": "ask"}))]
+        with self._lock:
+            problems = list(reversed(self.problems.values()))
+        if problems:
+            entries += [None, ("À regarder", None)]
+            entries += [
+                (_short(p.title, 50), _in_thread(self.open_problem, p.key), ("alert", "#d9a33a"))
+                for p in problems
+            ]
+            entries.append(None)
         recent = history.search("", limit=MENU_HISTORY)
         if recent:
             entries.append((
@@ -919,7 +1013,7 @@ def run() -> int:
     log.info("à l'écoute sur %s", server.path)
 
     app = _gtk_app(config)
-    watcher = None
+    watcher = system_watcher = None
     stop_events = threading.Event()
     try:
         if app is None:
@@ -936,6 +1030,8 @@ def run() -> int:
             ui.connect(daemon)
             handler.append(daemon.handle)
             watcher = _start_watcher(config, daemon)
+            system_watcher = system.SystemWatcher(config.system, daemon.on_problem, daemon.on_resolved)
+            system_watcher.start()
             threading.Thread(
                 target=hyprland.listen, args=(daemon.on_hyprland_event, stop_events), daemon=True
             ).start()
@@ -945,6 +1041,8 @@ def run() -> int:
         stop_events.set()
         if watcher:
             watcher.stop()
+        if system_watcher:
+            system_watcher.stop()
         server.server_close()
         log.info("arrêté")
     return 0

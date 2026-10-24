@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from custos import claude, cli, context, daemon, watch
+from custos import claude, cli, context, daemon, system, watch
 from custos.config import Config
 from custos.context import Context
 from custos.context.hyprland import ActiveWindow
@@ -308,6 +308,7 @@ def collected(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         selection=False,
         screenshot=False,
         failure=None,
+        problem=None,
         image=None,
         image_kind="window",
         window=None,
@@ -316,6 +317,9 @@ def collected(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         calls.append(
             {"selection": selection, "screenshot": screenshot, "failure": failure, "image": image}
         )
+        if problem:
+            calls[-1]["problem"] = problem
+            return Context(problem=problem)
         if window:
             calls[-1]["window"] = window
         return Context(
@@ -1307,3 +1311,81 @@ def test_replay_after_a_failed_question(monkeypatch, ui) -> None:
     d.answer("pourquoi ça crashe ?")
     d.answer("/r")
     assert calls[1].endswith("Question : pourquoi ça crashe ?") and ui.answers[-1] == "ok"
+
+
+
+SERVICE_PROBLEM = system.Problem(system.SERVICE, "service:user:sync.service", "service utilisateur en échec : sync.service", "× sync.service\ntoken=abcdef123456")
+
+
+def test_problem_lights_amber_badge_and_click_opens_it(ui, collected) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.on_problem(SERVICE_PROBLEM)
+    assert ui.notices[-1] == daemon.SYSTEM_PROBLEM and ui.states[-1] == MascotState.WORRIED
+    assert ui.alerts[-1] == (daemon.ALERT_PROBLEM, "service utilisateur en échec : sync.service")
+    d.open_from_mascot()
+    assert collected[-1]["problem"]["title"] == "service utilisateur en échec : sync.service"
+    assert d.problems == {} and ui.notices[-1] is None  # regardé : le badge s'éteint
+    assert ui.prompts[-1] == ("service utilisateur en échec : sync.service", "Entrée : explique et aide-moi à réparer")
+
+
+def test_problem_prompt_has_redacted_evidence() -> None:
+    ctx = Context(problem=SERVICE_PROBLEM.as_message())
+    prompt = context.build_prompt(None, ctx)
+    assert "Custos a remarqué ce problème sur ma machine : service utilisateur en échec" in prompt
+    assert "× sync.service" in prompt and "abcdef123456" not in prompt
+    assert prompt.endswith("Question : Explique ce problème et aide-moi à le réparer.")
+
+
+def test_resolved_problem_turns_badge_off(ui) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.on_problem(SERVICE_PROBLEM)
+    d.on_resolved(SERVICE_PROBLEM.key)
+    assert d.problems == {} and ui.notices[-1] is None
+
+
+def test_recent_failure_comes_before_problem(monkeypatch, ui, collected) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.on_problem(SERVICE_PROBLEM)
+    d.shell_event({"exit_code": 1, "command": "make", "cwd": "/tmp"})
+    d.open_from_mascot()
+    assert collected[-1]["failure"]["command"] == "make"
+    assert SERVICE_PROBLEM.key in d.problems  # toujours là pour le clic suivant
+
+
+def code_message(count: int, file: str = "/home/q/projet/main.py") -> dict:
+    errors = [{"line": i + 1, "message": f"erreur {i}", "source": "Pylance"} for i in range(count)]
+    return {"type": "code-problem", "file": file, "workspace": "/home/q/projet", "count": count, "errors": errors}
+
+
+def test_code_errors_only_when_they_increase(ui) -> None:
+    d = daemon.Daemon(Config(), ui)
+    d.handle(code_message(2))
+    problem = d.problems["code:/home/q/projet/main.py"]
+    assert problem.title == "2 erreurs dans main.py" and "ligne 2 [Pylance] : erreur 1" in problem.details
+    d.problems.clear()
+    d.handle(code_message(2))  # pas plus d'erreurs qu'avant : rien
+    d.handle(code_message(1))
+    assert d.problems == {}
+    d.handle(code_message(3))
+    assert d.problems["code:/home/q/projet/main.py"].title == "3 erreurs dans main.py"
+    d.handle(code_message(0))  # corrigé : l'alerte s'éteint
+    assert d.problems == {}
+
+
+def test_code_problems_can_be_disabled(ui) -> None:
+    config = Config()
+    config.system.code = False
+    d = daemon.Daemon(config, ui)
+    d.handle(code_message(2))
+    assert d.problems == {}
+
+
+def test_tray_menu_lists_problems_to_look_at(monkeypatch, ui) -> None:
+    monkeypatch.setattr(daemon.history, "search", lambda query, limit=8: [])
+    d = daemon.Daemon(Config(), ui)
+    d.on_problem(SERVICE_PROBLEM)
+    menu = d.tray_menu()
+    assert [e[0] if e else None for e in menu] == [
+        "Poser une question", None, "À regarder", "service utilisateur en échec : sync.service", None,
+    ]
+    assert menu[3][2] == ("alert", "#d9a33a")

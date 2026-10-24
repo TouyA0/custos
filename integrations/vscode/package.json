@@ -1,0 +1,12 @@
+{
+  "name": "custos",
+  "displayName": "Custos",
+  "description": "Prévient la mascotte Custos quand un fichier enregistré a de nouvelles erreurs (localement, sans rien envoyer ailleurs).",
+  "version": "0.1.0",
+  "publisher": "touya0",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js"
+}
