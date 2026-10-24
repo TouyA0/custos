@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -121,6 +122,9 @@ def build_system_prompt(machine: str = "", persona: str = "", agent: bool = Fals
     return "\n\n".join(parts)
 
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+MAX_ERROR = 2_000  # caractères : la fin de la sortie d'erreur, affichée dans la carte
 
 
 class ClaudeError(Exception):
@@ -291,68 +295,72 @@ def ask(
     message = build_message(prompt, images)
     workdir = conversations_dir()
     workdir.mkdir(parents=True, exist_ok=True)
-    try:
-        process = subprocess.Popen(
-            build_command(config, system_prompt, resume, agent, model),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            # Dossier à part : pas de CLAUDE.md de projet chargé par erreur.
-            cwd=workdir,
-        )
-    except FileNotFoundError as exc:
-        raise ClaudeError("la commande `claude` est introuvable") from exc
+    # Sortie d'erreur dans un fichier, lu seulement en cas d'échec : un tube que personne ne
+    # lit pendant la réponse se remplirait (--verbose) et bloquerait `claude`.
+    with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as errors:
+        try:
+            process = subprocess.Popen(
+                build_command(config, system_prompt, resume, agent, model),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                text=True,
+                # Dossier à part : pas de CLAUDE.md de projet chargé par erreur.
+                cwd=workdir,
+            )
+        except FileNotFoundError as exc:
+            raise ClaudeError("la commande `claude` est introuvable") from exc
 
-    timeout = config.agent_timeout if agent else config.timeout
-    timer = threading.Timer(timeout, process.kill)
-    timer.start()
-    if cancel:
-        # Arrêt immédiat, même si Claude n'a encore rien envoyé.
-        def watch_cancel() -> None:
-            while process.poll() is None:
-                if cancel.wait(0.1):
-                    process.kill()
-                    return
+        timeout = config.agent_timeout if agent else config.timeout
+        timer = threading.Timer(timeout, process.kill)
+        timer.start()
+        if cancel:
+            # Arrêt immédiat, même si Claude n'a encore rien envoyé.
+            def watch_cancel() -> None:
+                while process.poll() is None:
+                    if cancel.wait(0.1):
+                        process.kill()
+                        return
 
-        threading.Thread(target=watch_cancel, daemon=True).start()
-    received = False
-    try:
-        # L'entrée reste ouverte jusqu'au résultat : on y répond aux demandes de permission.
-        process.stdin.write(json.dumps(message) + "\n")
-        process.stdin.flush()
-        for line in process.stdout:
-            session = parse_session(line)
-            if session and on_session:
-                on_session(session)
-            for step in parse_tools(line):
-                if on_tool:
-                    on_tool(step)
-            request = parse_permission(line)
-            if request:
-                request_id, permission = request
-                choice = on_permission(permission) if on_permission else DENY
-                process.stdin.write(json.dumps(permission_response(request_id, permission, choice)) + "\n")
-                process.stdin.flush()
-            text = parse_line(line)
-            if text:
-                received = True
-                yield text
-            if _is_result(line):
-                process.stdin.close()  # fin de la conversation : `claude` peut s'arrêter
-        process.wait()
-    except (BrokenPipeError, ValueError):
-        process.wait()  # `claude` arrêté (fermeture, délai dépassé) pendant qu'on lui écrivait
-    finally:
-        timer.cancel()
-        if process.poll() is None:
-            process.kill()
+            threading.Thread(target=watch_cancel, daemon=True).start()
+        received = False
+        try:
+            # L'entrée reste ouverte jusqu'au résultat : on y répond aux demandes de permission.
+            process.stdin.write(json.dumps(message) + "\n")
+            process.stdin.flush()
+            for line in process.stdout:
+                session = parse_session(line)
+                if session and on_session:
+                    on_session(session)
+                for step in parse_tools(line):
+                    if on_tool:
+                        on_tool(step)
+                request = parse_permission(line)
+                if request:
+                    request_id, permission = request
+                    choice = on_permission(permission) if on_permission else DENY
+                    process.stdin.write(json.dumps(permission_response(request_id, permission, choice)) + "\n")
+                    process.stdin.flush()
+                text = parse_line(line)
+                if text:
+                    received = True
+                    yield text
+                if _is_result(line):
+                    process.stdin.close()  # fin de la conversation : `claude` peut s'arrêter
             process.wait()
+        except (BrokenPipeError, ValueError):
+            process.wait()  # `claude` arrêté (fermeture, délai dépassé) pendant qu'on lui écrivait
+        finally:
+            timer.cancel()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
 
-    if cancel and cancel.is_set():
-        return  # interrompue à ta demande : pas une erreur
-    if process.returncode == -9:
-        raise ClaudeError(f"pas de réponse après {timeout} s")
-    if process.returncode != 0 and not received:
-        stderr = process.stderr.read().strip()
-        raise ClaudeError(stderr or f"`claude` a quitté avec le code {process.returncode}")
+        if cancel and cancel.is_set():
+            return  # interrompue à ta demande : pas une erreur
+        if process.returncode == -9:
+            raise ClaudeError(f"pas de réponse après {timeout} s")
+        if process.returncode != 0 and not received:
+            errors.seek(0)
+            stderr = errors.read()[-MAX_ERROR:].strip()
+            raise ClaudeError(stderr or f"`claude` a quitté avec le code {process.returncode}")

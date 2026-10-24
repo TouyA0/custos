@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -100,3 +101,43 @@ def test_permission_request_and_responses() -> None:
     deny = claude.permission_response("r1", permission, claude.DENY)["response"]["response"]
     assert deny["behavior"] == "deny"
     assert claude.parse_permission(json.dumps({"type": "control_request", "request": {}})) is None
+
+
+FAKE_CLAUDE = """\
+#!/usr/bin/env python3
+import json, sys
+sys.stdin.readline()
+sys.stderr.write("x" * 300_000)  # bien plus qu'un tube (64 Ko)
+sys.stderr.flush()
+delta = {"type": "text_delta", "text": "Bonjour"}
+print(json.dumps({"type": "stream_event", "event": {"delta": delta}}), flush=True)
+print(json.dumps({"type": "result", "is_error": False}), flush=True)
+sys.stdin.read()
+"""
+
+
+def fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> None:
+    program = tmp_path / "bin" / "claude"
+    program.parent.mkdir()
+    program.write_text(script)
+    program.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{program.parent}:{os.environ['PATH']}")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+
+def test_verbose_stderr_does_not_block_the_answer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_claude(tmp_path, monkeypatch, FAKE_CLAUDE)
+    answer = "".join(claude.ask("salut", ClaudeConfig(timeout=5)))
+    assert answer == "Bonjour"
+
+
+def test_failure_shows_end_of_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    script = (
+        "#!/usr/bin/env python3\nimport sys\n"
+        "sys.stderr.write('x' * 300_000 + 'pas connecté')\nsys.exit(1)\n"
+    )
+    fake_claude(tmp_path, monkeypatch, script)
+    with pytest.raises(claude.ClaudeError) as error:
+        list(claude.ask("salut", ClaudeConfig(timeout=5)))
+    assert str(error.value).endswith("pas connecté")
+    assert len(str(error.value)) <= claude.MAX_ERROR
