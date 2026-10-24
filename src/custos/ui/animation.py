@@ -71,6 +71,20 @@ class Frame:
     scale: float = 1.0
 
 
+def snap(frame: Frame, pixels: float) -> Frame:
+    """La frame arrondie au pixel près (`pixels` : taille de la mascotte en pixels réels).
+
+    Le flottement ne fait que quelques pixels : la plupart des frames successives donnent
+    la même image une fois arrondies, et il est inutile de la redessiner.
+    """
+    return Frame(
+        frame.sprite,
+        round(frame.dx * pixels) / pixels,
+        round(frame.dy * pixels) / pixels,
+        1 + round((frame.scale - 1) * pixels) / pixels,
+    )
+
+
 class Animator:
     def __init__(self, sleep_after: float, now: float, rng: random.Random | None = None) -> None:
         self.sleep_after = sleep_after

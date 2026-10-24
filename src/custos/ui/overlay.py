@@ -29,7 +29,7 @@ from custos.config import MascotConfig
 from custos.context import hyprland
 from custos.states import MascotState
 from custos.ui import icons, position, theme
-from custos.ui.animation import ALL_SPRITES, Animator
+from custos.ui.animation import ALL_SPRITES, Animator, snap
 from custos.ui.bubble import WIDTH as BUBBLE_WIDTH
 from custos.ui.bubble import Bubble, image_drop_target
 from custos.ui.bubble import style as bubble_style
@@ -148,10 +148,24 @@ class MascotWidget(Gtk.Widget):
         canvas = round(self.size * (1 + 2 * PADDING))
         self.set_size_request(canvas, canvas)
         self._fps = 0
+        self._shown: tuple | None = None  # dernière image dessinée (voir _image)
         self._tick()
 
+    def _image(self, now: float) -> tuple:
+        """Ce qui sera affiché à l'instant `now`, au pixel près : frame, badge, taille du badge."""
+        scale = self.get_scale_factor()
+        frame = snap(self.animator.frame(now), self.size * scale)
+        badge = 0.0
+        if self.notice:
+            pulse = 1 + 0.08 * math.sin(2 * math.pi * now / BADGE_PULSE)
+            badge = round(self.size * BADGE_RADIUS * pulse * scale) / scale
+        return frame, self.notice, badge
+
     def _tick(self) -> bool:
-        self.queue_draw()
+        # Chaque image envoyée oblige Hyprland à recomposer l'écran sur le GPU (des gels du
+        # PC ont suivi ces recompositions incessantes) : seulement quand l'image change.
+        if self._image(time.monotonic()) != self._shown:
+            self.queue_draw()
         # La cadence suit l'état : on reprogramme le minuteur quand elle change.
         fps = self.animator.fps(time.monotonic())
         if fps == self._fps:
@@ -161,7 +175,8 @@ class MascotWidget(Gtk.Widget):
         return GLib.SOURCE_REMOVE
 
     def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:
-        frame = self.animator.frame(time.monotonic())
+        self._shown = self._image(time.monotonic())
+        frame, notice, badge_radius = self._shown
         texture, halo = self.sprites[frame.sprite]
         center = Graphene.Point()
         center.init(
@@ -177,22 +192,20 @@ class MascotWidget(Gtk.Widget):
         if halo:
             snapshot.append_texture(halo, rect)
         snapshot.append_texture(texture, rect)
-        if self.notice:
-            self._draw_badge(snapshot)
+        if notice:
+            self._draw_badge(snapshot, notice, badge_radius)
         snapshot.restore()
 
-    def _draw_badge(self, snapshot: Gtk.Snapshot) -> None:
+    def _draw_badge(self, snapshot: Gtk.Snapshot, notice: str, radius: float) -> None:
         """Pastille en haut à droite : ce que Custos a remarqué (texte, image…) ou ce qui
         t'attend (orange : ton accord ; vert : c'est fini)."""
-        pulse = 1 + 0.08 * math.sin(2 * math.pi * time.monotonic() / BADGE_PULSE)
-        radius = self.size * BADGE_RADIUS * pulse
         cx, cy = self.size * 0.34, -self.size * 0.36
         bounds = Graphene.Rect()
         bounds.init(cx - radius, cy - radius, 2 * radius, 2 * radius)
         circle = Gsk.RoundedRect()
         circle.init_from_rect(bounds, radius)
 
-        icon, (fill, ink) = BADGES.get(self.notice, ("sparkle", REMARKED))
+        icon, (fill, ink) = BADGES.get(notice, ("sparkle", REMARKED))
         snapshot.push_rounded_clip(circle)
         snapshot.append_color(fill, bounds)
         snapshot.pop()

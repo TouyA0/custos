@@ -13,6 +13,8 @@ from custos.ui.animation import (
     SPRITES,
     TIMEOUTS,
     Animator,
+    Frame,
+    snap,
 )
 
 
@@ -109,3 +111,16 @@ def test_stands_up_to_talk_when_attached() -> None:
     animator.set_state(MascotState.THINKING, 0.0)
     assert not animator.is_sitting
     assert animator.frame(1.0).sprite == SPRITES[MascotState.THINKING]
+
+
+def test_snap_rounds_to_whole_pixels() -> None:
+    frame = snap(Frame("idle/0", dx=0.004, dy=0.0249, scale=1.012), pixels=100)
+    assert frame == Frame("idle/0", dx=0.0, dy=0.02, scale=1.01)
+
+
+def test_idle_float_changes_image_only_a_few_times_per_second() -> None:
+    # 20 frames par seconde au repos, mais le flottement de quelques pixels ne change
+    # l'image que rarement : c'est ce qui évite de redessiner pour rien.
+    animator = make()
+    images = {snap(animator.frame(1 + i / FPS[MascotState.IDLE]), 96) for i in range(FPS[MascotState.IDLE] * 3)}
+    assert len(images) < FPS[MascotState.IDLE]
