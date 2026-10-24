@@ -15,7 +15,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Protocol
 
-from custos import claude, context, history, ipc, machine, watch
+from custos import claude, context, history, ipc, machine, terminal, watch
 from custos.config import Config, load, load_persona
 from custos.context import Context, clipboard, hyprland, privacy
 from custos.states import MascotState
@@ -712,6 +712,15 @@ class Daemon:
             self.ui.show_error(f"Impossible d'ouvrir le terminal : {exc}")
             return
         log.info("conversation ouverte en grand")
+
+    def run_in_terminal(self, command: str) -> None:
+        """Clic sur une commande de la réponse : un terminal s'ouvre avec elle, prête à lancer."""
+        try:
+            terminal.open_with(command, self.config.claude.open_command)
+        except OSError as exc:
+            self.ui.show_error(f"Impossible d'ouvrir le terminal : {exc}")
+            return
+        log.info("commande ouverte dans un terminal")
 
     @_locked
     def shell_event(self, message: dict) -> None:

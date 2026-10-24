@@ -1,6 +1,6 @@
 import pytest
 
-from custos.ui.markdown import blocks, table_markup, to_pango, valid
+from custos.ui.markdown import blocks, runnable, table_markup, to_pango, valid
 
 ANSWER = "Utilise **df** :\n\n```bash\ndf -h\n```\n\n- `-h` : tailles lisibles\n- `/` : racine"
 
@@ -37,13 +37,13 @@ def test_code_block_with_only_one_line_keeps_its_content() -> None:
 def test_blocks_split_text_and_code() -> None:
     assert blocks(ANSWER) == [
         ("text", "Utilise **df** :"),
-        ("code", "df -h"),
+        ("command", "df -h"),
         ("text", "- `-h` : tailles lisibles\n- `/` : racine"),
     ]
 
 
 def test_blocks_while_streaming_and_without_code() -> None:
-    assert blocks("Voici :\n```bash\nsudo pac") == [("text", "Voici :"), ("code", "sudo pac")]
+    assert blocks("Voici :\n```bash\nsudo pac") == [("text", "Voici :"), ("command", "sudo pac")]
     assert blocks("Juste du texte.") == [("text", "Juste du texte.")]
     assert blocks("") == []
 
@@ -109,3 +109,15 @@ def test_table_is_aligned() -> None:
 def test_table_markup_is_valid_pango() -> None:
     assert valid(table_markup(TABLE + "\n| a < b | [x](https://x.fr) |"))
     assert not valid("<b>pas fermé")
+
+
+def test_only_shell_blocks_are_commands() -> None:
+    assert blocks("```fish\nset -Ux EDITOR nvim\n```") == [("command", "set -Ux EDITOR nvim")]
+    assert blocks("```ini\n[Unit]\nAfter=x\n```") == [("code", "[Unit]\nAfter=x")]
+    assert blocks("```\nlsblk -f\n```") == [("command", "lsblk -f")]  # une ligne sans langue
+    assert blocks("```\nUUID=… / ext4\nUUID=… /home ext4\n```")[0][0] == "code"
+
+
+def test_console_prompts_and_output_are_dropped() -> None:
+    assert runnable("$ df -h\nSys. de fichiers  Taille\n$ free -h") == "df -h\nfree -h"
+    assert runnable("df -h\n") == "df -h"

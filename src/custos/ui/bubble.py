@@ -87,6 +87,7 @@ window.custos-bubble {{ background-color: rgba(0, 0, 0, 0.01); }}
 .card .permission button.allow:hover {{ background: {mix(theme.accent, theme.on_accent, 0.15)}; }}
 .card scrolledwindow.code {{ background-color: {rgba(text, 0.07)}; border-radius: 8px; }}
 .card label.code {{ padding: 8px 32px 8px 10px; }}
+.card .codeblock.command:hover scrolledwindow.code {{ background-color: {rgba(text, 0.12)}; }}
 .card label.table {{ padding: 2px 0 6px 0; }}
 .card label link, .card label link:visited {{ color: {theme.accent}; }}
 .card .divider {{ background-color: {rgba(text, 0.1)}; min-height: 1px; }}
@@ -155,7 +156,9 @@ class Bubble:
         on_permission: Callable[[str], None] = lambda choice: None,
         on_history: Callable[[str], list[tuple[str, str, str]]] = lambda query: [],
         on_open_history: Callable[[str], None] = lambda session: None,
+        on_run: Callable[[str], None] = lambda command: None,
     ) -> None:
+        self.on_run = on_run  # ouvre une commande de la réponse dans un terminal
         self.theme = LIGHT_THEME  # couleurs du code dans le texte (le reste : la feuille de style)
         self.on_history = on_history  # (session, quand, titre) des conversations trouvées
         self.on_open_history = on_open_history
@@ -330,10 +333,11 @@ class Bubble:
         self.close()
         return True
 
-    def _code_widget(self, code: str) -> Gtk.Widget:
+    def _code_widget(self, code: str, command: bool = False) -> Gtk.Widget:
         # Pas de retour à la ligne : une longue ligne défile horizontalement, comme dans
-        # un terminal, plutôt que d'être coupée en plein mot.
-        label = Gtk.Label(label=code, xalign=0, yalign=0, selectable=True, focusable=False)
+        # un terminal, plutôt que d'être coupée en plein mot. Une commande s'ouvre d'un clic
+        # dans un terminal (le clic ne sert donc pas à la sélectionner : ⧉ la copie).
+        label = Gtk.Label(label=code, xalign=0, yalign=0, selectable=not command, focusable=False)
         label.add_css_class("code")
         scroller = Gtk.ScrolledWindow(
             hscrollbar_policy=Gtk.PolicyType.AUTOMATIC, vscrollbar_policy=Gtk.PolicyType.NEVER
@@ -347,7 +351,19 @@ class Bubble:
         block = Gtk.Overlay(child=scroller)
         block.add_overlay(copy)
         block.add_css_class("codeblock")
+        if command:
+            block.add_css_class("command")
+            scroller.set_cursor_from_name("pointer")
+            scroller.set_tooltip_text("Ouvrir dans un terminal, prête à lancer")
+            click = Gtk.GestureClick()
+            click.connect("released", lambda *_args: self._run(code))
+            scroller.add_controller(click)
         return block
+
+    def _run(self, code: str) -> None:
+        """Clic sur une commande : un terminal s'ouvre avec elle tapée, et la carte se ferme."""
+        self.on_run(markdown.runnable(code))
+        self.close()
 
     # --- API utilisée par la mascotte --------------------------------------
 
@@ -556,8 +572,12 @@ class Bubble:
         while child := self.blocks.get_first_child():
             self.blocks.remove(child)
         for kind, content in markdown.blocks(self.answer.strip()):
-            widget = {"code": self._code_widget, "table": self._table_widget}.get(kind, self._text_widget)
-            self.blocks.append(widget(content))
+            if kind in ("code", "command"):
+                self.blocks.append(self._code_widget(content, command=kind == "command"))
+            elif kind == "table":
+                self.blocks.append(self._table_widget(content))
+            else:
+                self.blocks.append(self._text_widget(content))
         if self.thinking and self.suggestions.get_visible():
             self.suggestions.set_visible(False)  # le champ disparaît : sa liste aussi
         listing = self.suggestions.get_visible()

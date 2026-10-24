@@ -991,7 +991,9 @@ def test_no_tools_without_card_or_when_disabled(monkeypatch, ui) -> None:
 
 
 def test_cli_terminal_prefills_fish_command() -> None:
-    argv = cli.terminal_command("sudo rm 'a b'", "foot claude")
+    from custos import terminal
+
+    argv = terminal.terminal_command("sudo rm 'a b'", "foot claude")
     if argv[1] == "fish":
         assert argv == ["foot", "fish", "-C", "commandline -- 'sudo rm \\'a b\\''"]
 
@@ -1133,3 +1135,20 @@ def test_agents_from_many_threads(ui, agents) -> None:
     for thread in threads:
         thread.join()
     assert errors == []
+
+
+def test_command_from_answer_opens_in_terminal(monkeypatch, ui) -> None:
+    opened: list[tuple[str, str]] = []
+    monkeypatch.setattr(daemon.terminal, "open_with", lambda command, open_command: opened.append((command, open_command)))
+    config = Config()
+    daemon.Daemon(config, ui).run_in_terminal("df -h")
+    assert opened == [("df -h", config.claude.open_command)]
+
+
+def test_command_without_terminal_explains(monkeypatch, ui) -> None:
+    def missing(*_args):
+        raise FileNotFoundError("foot")
+
+    monkeypatch.setattr(daemon.terminal, "open_with", missing)
+    daemon.Daemon(Config(), ui).run_in_terminal("df -h")
+    assert ui.errors and "terminal" in ui.errors[-1]

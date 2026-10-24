@@ -13,6 +13,8 @@ CODE_BG = "#e4e6eb"
 CODE_FG = "#1a1f2b"
 
 _FENCE_LANG = re.compile(r"[\w+#.-]*")
+# Blocs qu'un clic ouvre dans un terminal : des commandes, pas un extrait de fichier.
+SHELL_LANGUAGES = {"bash", "sh", "shell", "zsh", "fish", "console", "shell-session", "terminal"}
 _LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
 _URL = re.compile(r"<?(https?://[^\s<>\"'`]+)>?")
 _URL_END = ".,;:!?»'\""  # ponctuation de la phrase, pas de l'adresse
@@ -26,10 +28,29 @@ def _escape(text: str) -> str:
 
 def _split_code(part: str) -> str:
     """Retire la ligne de langage (```bash) et les retours à la ligne autour du code."""
+    return _code_and_language(part)[0]
+
+
+def _code_and_language(part: str) -> tuple[str, str]:
     first, _, rest = part.partition("\n")
     if rest and _FENCE_LANG.fullmatch(first.strip()):
-        part = rest
-    return part.strip("\n")
+        return rest.strip("\n"), first.strip().lower()
+    return part.strip("\n"), ""
+
+
+def is_command(code: str, language: str) -> bool:
+    """Bloc de commandes shell : langue shell, ou une seule ligne sans langue."""
+    if language:
+        return language in SHELL_LANGUAGES
+    return bool(code.strip()) and "\n" not in code.strip()
+
+
+def runnable(code: str) -> str:
+    """La commande à taper : sans les invites `$ ` d'un bloc `console`, ni ses lignes de sortie."""
+    lines = code.strip().splitlines()
+    if any(line.startswith("$ ") for line in lines):
+        lines = [line[2:] for line in lines if line.startswith("$ ")]
+    return "\n".join(lines)
 
 
 def _link(url: str, label: str) -> str:
@@ -181,12 +202,13 @@ def table_markup(table: str, code_fg: str = CODE_FG, code_bg: str = CODE_BG) -> 
 
 
 def blocks(text: str) -> list[tuple[str, str]]:
-    """Découpe une réponse en morceaux ("text", markdown), ("code", code brut) et
-    ("table", tableau markdown)."""
+    """Découpe une réponse en morceaux ("text", markdown), ("code", code brut),
+    ("command", commandes shell : un clic les ouvre dans un terminal) et ("table", tableau)."""
     out = []
     for i, part in enumerate(text.split("```")):
         if i % 2:
-            out.append(("code", _split_code(part)))
+            code, language = _code_and_language(part)
+            out.append(("command" if is_command(code, language) else "code", code))
         elif part.strip():
             out.extend(_split_tables(part.strip("\n")))
     return out
